@@ -21,13 +21,15 @@ class Transform:
 
     def __init__(self, data, fs, wavelet=Cauchy(),
                 b=None, q = None, M=None, Mc=None, xi_1 = None,
-                pad_method='symmetric'):
+                pad_method='symmetric', scales='linear', dj = 1/4):
         
         
         self.data = np.asarray(data, dtype=float)
         self.N = self.data.shape[-1] # Number of samples
         self.fs = fs             # Sampling frequency
         self.wavelet = wavelet   # Cauchy wavelet
+        self.scales = scales   # Frequency scale
+        self.dj = dj
 
 
         # Pad data
@@ -95,19 +97,38 @@ class Transform:
         """
         jvals = self.j_channels
         real_freqs = np.fft.fftfreq(self.N, 1/self.fs)
-        Wfreq = np.zeros((len(jvals), self.N), dtype=complex)
-        for i, j in enumerate(jvals):
-            if (j/self.q + 1/self.b) > 0:
-                # eq3
-                alpha_j = (1.0 / self.b) + (j / self.q)
-                wtime = np.sqrt(alpha_j) * self.wavelet.eval_analysis(alpha_j * self.time)
-            else:
-                # eq4
-                phase = np.exp(2j * np.pi * self.xi_1 * j * self.time / self.q)
-                wtime = (1.0 / np.sqrt(self.b)) * self.wavelet.eval_analysis(self.time / self.b) * phase
 
-            Wfreq[i,:] = np.fft.fft(wtime)
-            self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:]))]
+        if self.scales == 'linear':
+            self.channel_freqs = np.zeros(len(self.j_channels))
+            Wfreq = np.zeros((len(jvals), self.N), dtype=complex)
+            for i, j in enumerate(jvals):
+                if (j/self.q + 1/self.b) > 0:
+                    # eq3
+                    alpha_j = (1.0 / self.b) + (j / self.q)
+                    wtime = np.sqrt(alpha_j) * self.wavelet.eval_analysis(alpha_j * self.time)
+                else:
+                    # eq4
+                    phase = np.exp(2j * np.pi * self.xi_1 * j * self.time / self.q)
+                    wtime = (1.0 / np.sqrt(self.b)) * self.wavelet.eval_analysis(self.time / self.b) * phase
+                Wfreq[i,:] = np.fft.fft(wtime)
+                self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:]))]
+
+        elif self.scales == 'dyadic':
+            s0 = 2 / self.fs
+            dj = self.dj
+            J = int(np.log2(self.N) / dj)
+
+            self.channel_freqs = np.zeros(J+1)
+            scales = np.flip(s0 * 2 ** (dj * np.arange(0, J+1)))
+            print(scales.shape, J)
+            Wfreq = np.zeros((len(scales), self.N), dtype=complex)
+            for i, scale in enumerate(scales):
+                wtime = np.sqrt(scale)* self.wavelet.eval_analysis(self.time / scale)
+                Wfreq[i,:] = np.fft.fft(wtime)
+                self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:]))]
+            pass
+                
+           
 
         return Wfreq
     
