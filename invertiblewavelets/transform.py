@@ -33,10 +33,7 @@ class Transform:
         # Pad data
         self.pad_width = 0
         if(pad_method is not None):
-            self.pad_width =  (int(2 ** np.ceil(np.log2(self.data.shape[-1]))) - self.data.shape[-1]) // 2
-            self.data = np.pad(self.data, self.pad_width, mode=pad_method)
-            self.N = self.data.shape[-1]
-            self.data *= signal.windows.tukey(self.N, alpha=.3)
+            self._pad_data(self.data, mode=pad_method)
 
          # fill default parameters
         self._init_params(b, q, M, Mc, xi_1)
@@ -51,7 +48,7 @@ class Transform:
         # Precompute the wavelets in frequency domain, Wfreq[j, :], shape = (#channels, N).
         self.freqs = np.fft.fftfreq(self.N)
         self.channel_freqs = np.zeros(len(self.j_channels))
-        self.Wfreq = self._build_wavelets_FD()
+        self.Wfreq = self._build_analysis_filter()
 
         # Compute the phase shift for time correction  
         self.phase_shift = np.exp(-1j * 2 * np.pi * self.freqs * (self.N / 2))
@@ -89,7 +86,7 @@ class Transform:
         if self.xi_1 is None:
             self.xi_1 = (self.fs * self.q) / max(self.M,1) / 2
     
-    def _build_wavelets_FD(self):
+    def _build_analysis_filter(self):
         """
         Build the frequency-domain wavelets W_j(w). For each channel j:
             wavelet_j(t) = eq3_analysis or eq4_analysis with shift 'delays[j]'.
@@ -97,32 +94,48 @@ class Transform:
         Returns Wfreq of shape (#channels, N).
         """
         jvals = self.j_channels
+        real_freqs = np.fft.fftfreq(self.N, 1/self.fs)
         Wfreq = np.zeros((len(jvals), self.N), dtype=complex)
         for i, j in enumerate(jvals):
             if (j/self.q + 1/self.b) > 0:
                 # eq3
-                wtime = self.wavelet.eq3_analysis(self.time, j, self.b, self.q)
+                alpha_j = (1.0 / self.b) + (j / self.q)
+                wtime = np.sqrt(alpha_j) * self.wavelet.eval_analysis(alpha_j * self.time)
             else:
                 # eq4
-                wtime = self.wavelet.eq4_analysis(self.time, j, self.b, self.q, self.xi_1)
+                phase = np.exp(2j * np.pi * self.xi_1 * j * self.time / self.q)
+                wtime = (1.0 / np.sqrt(self.b)) * self.wavelet.eval_analysis(self.time / self.b) * phase
 
             Wfreq[i,:] = np.fft.fft(wtime)
-            self.channel_freqs[i] = self.freqs[np.argmax(np.abs(Wfreq[i,:]))]
+            self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:]))]
 
         return Wfreq
     
-    def forward(self):
+    def _pad_data(self, data, mode = 'symmetric'):
+        """
+        Pad the data to the nearest power of 2.
+        """
+        if mode is not None:
+            self.pad_width =  (int(2 ** np.ceil(np.log2(data.shape[-1]))) - data.shape[-1]) // 2
+            data = np.pad(data, self.pad_width, mode=mode)
+            data *= signal.windows.tukey(data.shape[-1], alpha=.3)
+            self.N = data.shape[-1]
+            self.data = data
+    
+    def forward(self, new_data=None):
         """
         For each channel j:
           coeffs[j, :] = ifft( fft(data) * Wfreq[j, :] )
         shape: (#channels, N)
         """
+        if new_data is not None and new_data.shape[-1] != self.N - 2*self.pad_width:
+            raise ValueError(f"New data length {new_data.shape[-1]} does not match initialized data length {self.N}. Create new Transform object to reinitialize filterbanks.")
+        elif new_data is not None:
+            self._pad_data(new_data)
+
         Fdata = np.fft.fft(self.data)
-        J = self.Wfreq.shape[0]
-        coeffs = np.zeros((J, self.N), dtype=complex)
         coeffs = np.fft.ifft(Fdata * self.Wfreq, axis=1)
-        for j in range(J):
-            coeffs[j, :] = np.fft.ifft(Fdata * self.Wfreq[j, :])
+
         return coeffs
     
     def inverse(self, coeffs):
@@ -132,16 +145,10 @@ class Transform:
         2) Sum_j [ conj(W_j(w)) * c2Dfreq_j(w ) ] / Sfreq(w).
         3) ifft -> xhat(n).
         """
-        J = coeffs.shape[0]
-        c2Dfreq = np.zeros_like(coeffs, dtype=complex)  # same shape
-        for j in range(J):
-            c2Dfreq[j, :] = np.fft.fft(coeffs[j, :])
-
+        c2Dfreq = np.fft.fft(coeffs, axis=1)  
+        
         # Weighted sum in freq: XhatFreq = [1/Sfreq] * sum_j conj(Wfreq[j,:]) * c2Dfreq[j,:]
-        numerator = np.zeros(self.N, dtype=complex)
-        for j in range(J):
-            numerator += np.conjugate(self.Wfreq[j,:]) * c2Dfreq[j,:]
-
+        numerator =  np.sum(np.conj(self.Wfreq) * c2Dfreq, axis=0)
         XhatFreq = numerator / self.Sfreq
         xhat_time = np.fft.ifft(XhatFreq).real
 
@@ -152,7 +159,7 @@ class Transform:
         return xhat_time
     
 
-    def plot_coeff_power(self, coeffs, cmap='viridis', vmin=None, vmax=None, 
+    def power_scalogram(self, coeffs, cmap='viridis', vmin=None, vmax=None, 
                         y_tick_steps=5, figsize=(10, 6)):
         """
         Plot the power of the wavelet coefficients.
@@ -166,19 +173,10 @@ class Transform:
         """
         power = np.abs(coeffs) ** 2  # Power of coefficients
 
-        # Calculate frequency for each channel
-        alpha_j = (1.0 / self.b) + (self.j_channels / self.q)
-        frequency_j = alpha_j / (2 * np.pi)  # Convert scale to frequency in Hz
-
-        # Sort frequencies and corresponding power for better visualization
-        sorted_indices = np.argsort(frequency_j)
-        frequency_j_sorted = frequency_j[sorted_indices]
-        power_sorted = power[sorted_indices, :]
-
         plt.figure(figsize=figsize)
-        extent = [self.time[0], self.time[-1], frequency_j_sorted[0], frequency_j_sorted[-1]]
+        extent = [0, self.N/self.fs, self.channel_freqs[0], self.channel_freqs[-1]]
 
-        im = plt.imshow(np.log(power_sorted), aspect='auto', origin='lower', extent=extent, 
+        im = plt.imshow(np.log(power[:,self.pad_width:-self.pad_width]), aspect='auto', origin='lower', extent=extent, 
                         cmap=cmap, vmin=vmin, vmax=vmax)
 
         plt.colorbar(im, label='Power')
@@ -187,7 +185,7 @@ class Transform:
         plt.ylabel('Frequency [Hz]')
 
         # Set y-axis ticks
-        y_min, y_max = frequency_j_sorted[0], frequency_j_sorted[-1]
+        y_min, y_max = self.channel_freqs[0], self.channel_freqs[-1]
         y_ticks = np.linspace(y_min, y_max, y_tick_steps)
         plt.yticks(y_ticks, [f"{freq:.2f}" for freq in y_ticks])
 
