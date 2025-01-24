@@ -30,6 +30,7 @@ class Transform:
         self.wavelet = wavelet   # Cauchy wavelet
         self.scales = scales   # Frequency scale
         self.dj = dj
+        self.pad_method = pad_method
 
 
         # Pad data
@@ -129,7 +130,6 @@ class Transform:
             pass
                 
            
-
         return Wfreq
     
     def _pad_data(self, data, mode = 'symmetric'):
@@ -137,7 +137,7 @@ class Transform:
         Pad the data to the nearest power of 2.
         """
         if mode is not None:
-            self.pad_width =  (int(2 ** np.ceil(np.log2(data.shape[-1]))) - data.shape[-1]) // 2
+            self.pad_width =  (int(2 ** np.ceil(np.log2(data.shape[-1]*1.5))) - data.shape[-1]) // 2
             data = np.pad(data, self.pad_width, mode=mode)
             data *= signal.windows.tukey(data.shape[-1], alpha=.3)
             self.N = data.shape[-1]
@@ -152,7 +152,9 @@ class Transform:
         if new_data is not None and new_data.shape[-1] != self.N - 2*self.pad_width:
             raise ValueError(f"New data length {new_data.shape[-1]} does not match initialized data length {self.N}. Create new Transform object to reinitialize filterbanks.")
         elif new_data is not None:
-            self._pad_data(new_data)
+            self.data = new_data
+            if self.pad_method is not None:
+                self._pad_data(new_data)
 
         Fdata = np.fft.fft(self.data)
         coeffs = np.fft.ifft(Fdata * self.Wfreq, axis=1)
@@ -197,8 +199,12 @@ class Transform:
         plt.figure(figsize=figsize)
         extent = [0, self.N/self.fs, self.channel_freqs[0], self.channel_freqs[-1]]
 
-        im = plt.imshow(np.log(power[:,self.pad_width:-self.pad_width]), aspect='auto', origin='lower', extent=extent, 
-                        cmap=cmap, vmin=vmin, vmax=vmax)
+        if self.pad_width !=0:
+            im = plt.imshow(np.log(power[:,self.pad_width:-self.pad_width]), aspect='auto', origin='lower', extent=extent, 
+                            cmap=cmap, vmin=vmin, vmax=vmax)
+        else:
+            im = plt.imshow(np.log(power), aspect='auto', origin='lower', extent=extent, 
+                            cmap=cmap, vmin=vmin, vmax=vmax)
 
         plt.colorbar(im, label='Power')
 
