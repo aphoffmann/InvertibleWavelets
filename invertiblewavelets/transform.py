@@ -181,7 +181,6 @@ class Transform:
 
         return xhat_time
     
-
     def power_scalogram(self, coeffs, cmap='viridis', vmin=None, vmax=None, 
                         y_tick_steps=5, figsize=(10, 6)):
         """
