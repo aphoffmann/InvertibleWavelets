@@ -52,7 +52,7 @@ class Transform:
         self.freqs = np.fft.fftfreq(self.N)
         self.channel_freqs = np.zeros(len(self.j_channels))
         self.Wfreq = self._build_analysis_filter()
-
+        
         # Compute the phase shift for time correction  
         self.phase_shift = np.exp(-1j * 2 * np.pi * self.freqs * (self.N / 2))
         self.Wfreq *= self.phase_shift[np.newaxis, :]
@@ -121,13 +121,12 @@ class Transform:
 
             self.channel_freqs = np.zeros(J+1)
             scales = np.flip(s0 * 2 ** (dj * np.arange(0, J+1)))
-            print(scales.shape, J)
             Wfreq = np.zeros((len(scales), self.N), dtype=complex)
             for i, scale in enumerate(scales):
                 wtime = np.sqrt(scale)* self.wavelet.eval_analysis(self.time / scale)
                 Wfreq[i,:] = np.fft.fft(wtime)
                 self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:]))]
-            pass
+            
                 
            
         return Wfreq
