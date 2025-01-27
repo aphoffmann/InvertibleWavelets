@@ -21,7 +21,7 @@ class Transform:
 
     def __init__(self, data, fs, wavelet=Cauchy(),
                 b=None, q = None, M=None, Mc=None, xi_1 = None,
-                pad_method='symmetric', scales='linear', dj = 1/4):
+                pad_method='symmetric', scales='linear', dj = 1/4, real = False):
         
         
         self.data = np.asarray(data, dtype=float)
@@ -31,6 +31,7 @@ class Transform:
         self.scales = scales   # Frequency scale
         self.dj = dj
         self.pad_method = pad_method
+        self.real = real
 
 
         # Pad data
@@ -48,7 +49,7 @@ class Transform:
         # define wavelet channels
         self.j_channels = np.arange(-self.Mc, self.M)
 
-        # Precompute the wavelets in frequency domain, Wfreq[j, :], shape = (#channels, N).
+        # Precompute the wavelets in frequency domain, Wfreq[j, :], shape = (# scale channels, #N fft frequency channels).
         self.freqs = np.fft.fftfreq(self.N)
         self.channel_freqs = np.zeros(len(self.j_channels))
         self.Wfreq = self._build_analysis_filter()
@@ -111,8 +112,13 @@ class Transform:
                     # eq4
                     phase = np.exp(2j * np.pi * self.xi_1 * j * self.time / self.q)
                     wtime = (1.0 / np.sqrt(self.b)) * self.wavelet.eval_analysis(self.time / self.b) * phase
-                Wfreq[i,:] = np.fft.fft(wtime)
-                self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:]))]
+                
+                if self.real:
+                    Wfreq[i,:] = np.fft.fft(wtime.real)
+                else:
+                    Wfreq[i,:] = np.fft.fft(wtime)
+
+                self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:self.N//2]))]
 
         elif self.scales == 'dyadic':
             s0 = 2 / self.fs
@@ -181,7 +187,7 @@ class Transform:
         return xhat_time
     
     def power_scalogram(self, coeffs, cmap='viridis', vmin=None, vmax=None, 
-                        y_tick_steps=5, figsize=(10, 6)):
+                        y_tick_steps=5, figsize=(10, 6), title = 'Wavelet Coefficients Power'):
         """
         Plot the power of the wavelet coefficients.
 
@@ -214,7 +220,7 @@ class Transform:
         y_ticks = np.linspace(y_min, y_max, y_tick_steps)
         plt.yticks(y_ticks, [f"{freq:.2f}" for freq in y_ticks])
 
-        plt.title('Wavelet Coefficients Power')
+        plt.title(title)
         plt.grid(True, which='both', linestyle='--', linewidth=0.5)
         plt.tight_layout()
         plt.show()  

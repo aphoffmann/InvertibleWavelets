@@ -1,9 +1,11 @@
 import numpy as np
 from scipy.interpolate import interp1d
+from scipy.signal import windows
+from scipy import signal
 import pywt
 
 
-__all__ = ["Morlet", "Cauchy", "PyWaveletWrapper"]
+__all__ = ["Morlet", "Cauchy", "PyWaveletWrapper", "Shannon", "Testlet" ]
 
 class Morlet:
     def __init__(self, w0=6):
@@ -14,7 +16,7 @@ class Morlet:
         self.constant_term = np.exp(-0.5 * self.w0**2)
 
     def eval_analysis(self, t):
-        gaussian = np.exp(-0.5 * t**2) * np.pi**(-0.25)
+        gaussian = np.exp(- .5* t**2) * np.pi**(-0.25)
         wavelet = (np.exp(1j * self.w0 * t) - self.constant_term) * gaussian
         return wavelet
 
@@ -67,3 +69,28 @@ class PyWaveletWrapper:
         # Interpolate the scaled wavelet to the desired time points
         wavelet_at_t = self.interp_func(t)
         return wavelet_at_t
+    
+class Shannon:
+    def __init__(self, B=1, C = 1):
+        """
+        TODO
+        """
+        self.B = B
+        self.C = C
+
+    def eval_analysis(self, t):
+        wavelet = np.sqrt(self.B) * np.sin(np.pi*t*self.B)/(np.pi*t*.5) * np.exp(2j*self.C *np.pi*t)
+        return wavelet
+        
+
+class Testlet:
+    def __init__(self, alpha = 1):
+        """
+        TODO
+        """
+        self.alpha = alpha
+
+    def eval_analysis(self, t):
+        #wavelet =np.exp(2j*np.pi*t)*windows.gaussian(t.shape[-1], self.alpha) ## Constant window
+        wavelet = signal.square(2 * np.pi * t) * windows.gaussian(t.shape[-1], self.alpha)
+        return wavelet
