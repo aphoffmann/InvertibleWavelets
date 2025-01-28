@@ -19,6 +19,13 @@ class Morlet:
         gaussian = np.exp(- .5* t**2) * np.pi**(-0.25)
         wavelet = (np.exp(1j * self.w0 * t) - self.constant_term) * gaussian
         return wavelet
+    
+    def eval_analysis_f(self, w):
+        # Todo, directly compute the Fourier transform of the wavelet
+        Hw = np.array(w)
+        Hw[w <= 0] = 0
+        Hw[w > 0] = 1
+        return np.pi ** -.25 * Hw * np.exp((-(w - self.w0) ** 2) / 2)
 
 class Cauchy:
     def __init__(self, alpha=300):
@@ -41,7 +48,6 @@ class PyWaveletWrapper:
 
         Parameters:
         - wavelet_name (str): Name of the PyWavelet wavelet (e.g., 'morl', 'cmor', 'gaus1', etc.).
-        - scale (float): Scaling factor for the wavelet.
         """
         self.wavelet_name = wavelet_name
         try:
@@ -84,6 +90,9 @@ class Shannon:
         
 
 class Testlet:
+    """
+    Template for testing any filter
+    """
     def __init__(self, alpha = 1):
         """
         TODO
