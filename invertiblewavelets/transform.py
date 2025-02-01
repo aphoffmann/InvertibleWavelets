@@ -38,16 +38,18 @@ class Transform:
 
     def __init__(self, data, fs, wavelet=Cauchy(),
                 b=None, q = None, M=None, Mc=None, xi_1 = None,
-                pad_method='symmetric', scales='linear', dj = 1/4, real = False):
+                pad_method='symmetric', scales='linear', dj = 1/4, lowpass_channel = False):
         
         
         self.data = np.asarray(data, dtype=float)
-        self.N = self.data.shape[-1]                    # Number of samples
+        self.N = None                                   # Number of samples
+        self.N_orig = self.data.shape[-1]
         self.fs = fs                                    # Sampling frequency
         self.wavelet = wavelet                          # Wavelet class that includes wavelet.eval_analysis(t)
         self.scales = scales                            # Frequency scale type: 'linear' or 'dyadic'
         self.dj = dj                                    # Dyadic scale spacing                       
         self.pad_method = pad_method                    # Padding method (See numpy.pad)
+        self.lowpass_channel = lowpass_channel                    # Include lowpass channel in wavelet transform
 
 
         # Pad data with Tukey window
@@ -93,7 +95,7 @@ class Transform:
         self.xi_1 = xi_1    
 
         if self.b is None:
-            self.b = self.N / (2 * self.fs)
+            self.b = self.N_orig / (2 * self.fs)
 
         if self.q is None:
             self.q = self.b
@@ -135,19 +137,48 @@ class Transform:
                 # Calculate FFT of wavelet filter
                 Wfreq[i,:] = np.fft.fft(wtime)
                 self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:self.N//2]))]
-
         elif self.scales == 'dyadic':
-            s0 = 2 / self.fs
-            dj = self.dj
-            J = int(np.log2(self.N) / dj)
+            # 1) Evaluate unscaled wavelet in time domain
+            wavelet_unscaled = self.wavelet.eval_analysis(self.time)
+            
+            # 2) FFT and find the index of the peak magnitude
+            wavelet_unscaled_fft = np.fft.fft(wavelet_unscaled)
+            freqs = np.fft.fftfreq(len(wavelet_unscaled_fft), d=1.0/self.fs)
+            peak_idx = np.argmax(np.abs(wavelet_unscaled_fft))
+            center_freq = abs(freqs[peak_idx])  # take absolute value in case the bin is negative
 
+            # 3) Define the smallest scale from the center frequency
+            #    (For a Morlet wavelet at scale=1 => wavelet center frequency ≈ center_freq.)
+            s0 = 1.0 / center_freq
+            
+            # 4) Define the number of scales J
+            dj = self.dj
+            # For the largest scale, use e.g. the signal duration in seconds
+            s_max = (self.N_orig / self.fs/10)  
+            J = int(np.floor(np.log2(s_max / s0) / dj))
+
+            # 5) Generate scales (flip if you prefer largest->smallest)
+            scales = s0 * 2.0**(dj * np.arange(J+1))
+            scales = np.flip(scales)
+            
+            # 6) Wavelet transform across scales
             self.channel_freqs = np.zeros(J+1)
-            scales = np.flip(s0 * 2 ** (dj * np.arange(0, J+1)))
             Wfreq = np.zeros((len(scales), self.N), dtype=complex)
+            real_freqs = np.fft.fftfreq(self.N, d=1.0/self.fs)
+            
             for i, scale in enumerate(scales):
-                wtime = np.sqrt(scale)* self.wavelet.eval_analysis(self.time / scale)
-                Wfreq[i,:] = np.fft.fft(wtime)
-                self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:]))]
+                wtime = np.sqrt(scale) * self.wavelet.eval_analysis(self.time / scale)
+                Wfreq[i, :] = np.fft.fft(wtime)
+                # Grab channel frequency by looking at the peak in the FFT
+                self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i, :]))]
+
+        if(self.lowpass_channel):
+            # Add lowpass channel
+            cutoff_freq  = self.channel_freqs[0]
+            lp_filter = np.ones(real_freqs.shape)*1e-8
+            lp_filter[np.abs(real_freqs) < cutoff_freq] = 1
+            #lp_filter = 1 / np.sqrt(1 + (real_freqs / cutoff_freq)**2*3)
+            Wfreq = np.vstack((lp_filter, Wfreq))
            
         return Wfreq
     
@@ -156,11 +187,16 @@ class Transform:
         Pad the data to the nearest power of 2 for FFT.
         """
         if mode is not None:
-            self.pad_width =  (int(2 ** np.ceil(np.log2(data.shape[-1]*1.5))) - data.shape[-1]) // 2
-            data = np.pad(data, self.pad_width, mode=mode)
-            data *= signal.windows.tukey(data.shape[-1], alpha=.3)
-            self.N = data.shape[-1]
-            self.data = data
+            target_length = int(2 ** np.ceil(np.log2(self.N_orig)))
+            initial_pad = (target_length - self.N_orig) // 2
+            data = np.pad(data, initial_pad, mode=mode)
+            data *= signal.windows.tukey(data.shape[-1], alpha=0.3)
+            
+            # Determine extra zero-padding width.
+            extra_pad = initial_pad
+            self.pad_width = 2*extra_pad
+            self.data = np.pad(data, extra_pad, mode='constant')
+            self.N = self.data.shape[-1]
     
     def forward(self, new_data=None):
         """
@@ -168,8 +204,9 @@ class Transform:
           coeffs[j, :] = ifft( fft(data) * Wfreq[j, :] )
         shape: (#channels, N)
         """
-        if new_data is not None and new_data.shape[-1] != self.N - 2*self.pad_width:
+        if new_data is not None and new_data.shape[-1] != self.N_orig:
             raise ValueError(f"New data length {new_data.shape[-1]} does not match initialized data length {self.N}. Create new Transform object to reinitialize filterbanks.")
+        
         elif new_data is not None:
             self.data = new_data
             if self.pad_method is not None:
@@ -187,7 +224,7 @@ class Transform:
         2) Sum_j [ conj(W_j(w)) * c2Dfreq_j(w ) ] / Sfreq(w).
         3) ifft -> xhat(n).
         """
-        coeffs_f = np.fft.fft(coeffs_t, axis=1)  
+        coeffs_f = np.fft.fft(coeffs_t, axis=1)
         
         # Weighted sum in freq: XhatFreq = [1/Sfreq] * sum_j conj(Wfreq[j,:]) * c2Dfreq[j,:]
         # Normalizes frequency overlap between channels

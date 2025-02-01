@@ -7,25 +7,46 @@ import pywt
 
 __all__ = ["Morlet", "Cauchy", "PyWaveletWrapper", "Shannon", "Testlet" ]
 
+
+class Morlet:
+    def __init__(self, fc=1, fb=1):
+        """
+        Initializes the Morlet wavelet with given bandwidth.
+
+        Parameters:
+        - fc (float): The bandwidth parameter of the Morlet wavelet.
+        """
+        self.fc = fc
+        self.fb = fb
+
+    def eval_analysis(self, t):
+        """
+        Evaluates the Morlet wavelet at given time points using the C++ formula.
+
+        Parameters:
+        - t (np.ndarray): Time points at which to evaluate the wavelet.
+        - scale (float): The scale of the wavelet.
+
+        Returns:
+        - np.ndarray: Evaluated complex Morlet wavelet values.
+        """
+        wavelet = 1/ np.sqrt(2*self.fb) *  np.exp(2j*np.pi*self.fc*t)*np.exp(-(t ** 2) / self.fb)
+
+        return wavelet
+
+"""
 class Morlet:
     def __init__(self, w0=6):
-        """
-        TODO
-        """
+
         self.w0 = w0
         self.constant_term = np.exp(-0.5 * self.w0**2)
+        self.c = (1 + np.exp(-self.w0**2) - 2 * np.exp(-0.75 * self.w0**2))**0.5
 
     def eval_analysis(self, t):
         gaussian = np.exp(- .5* t**2) * np.pi**(-0.25)
-        wavelet = (np.exp(1j * self.w0 * t) - self.constant_term) * gaussian
+        wavelet = self.c * (np.exp(1j * self.w0 * t) - self.constant_term) * gaussian
         return wavelet
-    
-    def eval_analysis_f(self, w):
-        # Todo, directly compute the Fourier transform of the wavelet
-        Hw = np.array(w)
-        Hw[w <= 0] = 0
-        Hw[w > 0] = 1
-        return np.pi ** -.25 * Hw * np.exp((-(w - self.w0) ** 2) / 2)
+"""
 
 class Cauchy:
     def __init__(self, alpha=300):
