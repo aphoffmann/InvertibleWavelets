@@ -58,6 +58,7 @@ class Cauchy:
     def eval_analysis(self, t):
         """Continuous-time 'analysis' mother wavelet."""
         # factor^(-1 - alpha)
+        t = 1.984 * t
         factor = 1 - 2j * np.pi * t / self.alpha
         wavelet = factor ** (-1 - self.alpha)
         return wavelet

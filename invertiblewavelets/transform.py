@@ -38,7 +38,7 @@ class Transform:
 
     def __init__(self, data, fs, wavelet=Cauchy(),
                 b=None, q = None, M=None, Mc=None, xi_1 = None,
-                pad_method='symmetric', scales='linear', dj = 1/4, lowpass_channel = False):
+                pad_method='symmetric', scales='linear', dj = 1/4):
         
         
         self.data = np.asarray(data, dtype=float)
@@ -49,7 +49,6 @@ class Transform:
         self.scales = scales                            # Frequency scale type: 'linear' or 'dyadic'
         self.dj = dj                                    # Dyadic scale spacing                       
         self.pad_method = pad_method                    # Padding method (See numpy.pad)
-        self.lowpass_channel = lowpass_channel                    # Include lowpass channel in wavelet transform
 
 
         # Pad data with Tukey window
@@ -57,12 +56,14 @@ class Transform:
         if(pad_method is not None):
             self._pad_data(self.data, mode=pad_method)
 
-        # fill default parameters for linear scales
-        self._init_params(b, q, M, Mc, xi_1)
-
         # create time vector, centered so wavelet is around t=0
         self.time = np.arange(self.N) / self.fs
         self.time -= np.mean(self.time)
+
+        # fill default parameters for linear scales
+        self._init_params(b, q, M, Mc, xi_1)
+
+  
 
         # define wavelet channels. Mc is compensation channels for low frequences (See Holighaus et al. 2023)
         self.j_channels = np.arange(-self.Mc, self.M)
@@ -95,10 +96,15 @@ class Transform:
         self.xi_1 = xi_1    
 
         if self.b is None:
-            self.b = self.N_orig / (2 * self.fs)
+            T_eff, _, _ = self.compute_effective_support(self.time)
+            T_signal = self.N_orig / self.fs
+            margin = 0.1 * T_signal 
+            self.b = 0.5 * (T_signal - margin) / T_eff
+
+        self.s_max = self.b
 
         if self.q is None:
-            self.q = self.b
+            self.q = 5*self.b
 
         if self.M is None:
             self.M = int(self.q*(self.fs/2 - 1/self.b))
@@ -154,8 +160,7 @@ class Transform:
             # 4) Define the number of scales J
             dj = self.dj
             # For the largest scale, use e.g. the signal duration in seconds
-            s_max = (self.N_orig / self.fs/10)  
-            J = int(np.floor(np.log2(s_max / s0) / dj))
+            J = int(np.floor(np.log2(self.s_max / s0) / dj))
 
             # 5) Generate scales (flip if you prefer largest->smallest)
             scales = s0 * 2.0**(dj * np.arange(J+1))
@@ -172,13 +177,6 @@ class Transform:
                 # Grab channel frequency by looking at the peak in the FFT
                 self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i, :]))]
 
-        if(self.lowpass_channel):
-            # Add lowpass channel
-            cutoff_freq  = self.channel_freqs[0]
-            lp_filter = np.ones(real_freqs.shape)*1e-8
-            lp_filter[np.abs(real_freqs) < cutoff_freq] = 1
-            #lp_filter = 1 / np.sqrt(1 + (real_freqs / cutoff_freq)**2*3)
-            Wfreq = np.vstack((lp_filter, Wfreq))
            
         return Wfreq
     
@@ -191,11 +189,8 @@ class Transform:
             initial_pad = (target_length - self.N_orig) // 2
             data = np.pad(data, initial_pad, mode=mode)
             data *= signal.windows.tukey(data.shape[-1], alpha=0.3)
-            
-            # Determine extra zero-padding width.
-            extra_pad = initial_pad
-            self.pad_width = 2*extra_pad
-            self.data = np.pad(data, extra_pad, mode='constant')
+            self.data = data
+            self.pad_width = initial_pad
             self.N = self.data.shape[-1]
     
     def forward(self, new_data=None):
@@ -239,6 +234,50 @@ class Transform:
             xhat_time = xhat_time[self.pad_width:-self.pad_width]
 
         return xhat_time
+    
+    def compute_effective_support(self, t, energy_fraction=0.99):
+        """
+        Computes the effective support of a wavelet as the time interval containing
+        a specified fraction of its total energy.
+        
+        Parameters:
+            wavelet         : An instance of a wavelet class that has an eval_analysis(t) method.
+            energy_fraction : The fraction of total energy to be contained within the support (default 0.99).
+            time_range      : Tuple (t_min, t_max) defining the time interval over which to evaluate the wavelet.
+            num_points      : Number of time points to use in the evaluation.
+            
+        Returns:
+            effective_support : The length of the time interval that contains the specified energy fraction.
+            t_low             : Lower time bound of the effective support.
+            t_high            : Upper time bound of the effective support.
+        """
+               
+        # Evaluate the wavelet over the time vector.
+        psi = self.wavelet.eval_analysis(t)
+        
+        # Compute the energy density |psi(t)|^2.
+        energy = np.abs(psi)**2
+        dt = t[1] - t[0]
+        
+        # Total energy (approximated as the integral using the Riemann sum).
+        total_energy = np.sum(energy) * dt
+        
+        # Compute the cumulative energy over time.
+        cumulative_energy = np.cumsum(energy) * dt
+        
+        # Find the indices where the cumulative energy crosses the lower and upper bounds.
+        lower_bound_energy = (1 - energy_fraction) / 2 * total_energy
+        upper_bound_energy = (1 + energy_fraction) / 2 * total_energy
+        
+        lower_index = np.searchsorted(cumulative_energy, lower_bound_energy)
+        upper_index = np.searchsorted(cumulative_energy, upper_bound_energy)
+        
+        # Convert these indices back to time values.
+        t_low = t[lower_index]
+        t_high = t[upper_index]
+        
+        effective_support = t_high - t_low
+        return effective_support, t_low, t_high
     
     def power_scalogram(self, coeffs, cmap='viridis', vmin=None, vmax=None, 
                         y_tick_steps=5, figsize=(10, 6), title = 'Wavelet Coefficients Power'):
