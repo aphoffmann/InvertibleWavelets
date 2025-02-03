@@ -34,20 +34,6 @@ class Morlet:
 
         return wavelet
 
-"""
-class Morlet:
-    def __init__(self, w0=6):
-
-        self.w0 = w0
-        self.constant_term = np.exp(-0.5 * self.w0**2)
-        self.c = (1 + np.exp(-self.w0**2) - 2 * np.exp(-0.75 * self.w0**2))**0.5
-
-    def eval_analysis(self, t):
-        gaussian = np.exp(- .5* t**2) * np.pi**(-0.25)
-        wavelet = self.c * (np.exp(1j * self.w0 * t) - self.constant_term) * gaussian
-        return wavelet
-"""
-
 class Cauchy:
     def __init__(self, alpha=300):
         """
@@ -58,7 +44,7 @@ class Cauchy:
     def eval_analysis(self, t):
         """Continuous-time 'analysis' mother wavelet."""
         # factor^(-1 - alpha)
-        t = 1.984 * t
+        t = t
         factor = 1 - 2j * np.pi * t / self.alpha
         wavelet = factor ** (-1 - self.alpha)
         return wavelet

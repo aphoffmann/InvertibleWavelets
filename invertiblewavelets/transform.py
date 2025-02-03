@@ -99,12 +99,12 @@ class Transform:
             T_eff, _, _ = self.compute_effective_support(self.time)
             T_signal = self.N_orig / self.fs
             margin = 0.1 * T_signal 
-            self.b = 0.5 * (T_signal - margin) / T_eff
+            self.b =  (T_signal - margin) / T_eff
 
         self.s_max = self.b
 
         if self.q is None:
-            self.q = 5*self.b
+            self.q = self.b
 
         if self.M is None:
             self.M = int(self.q*(self.fs/2 - 1/self.b))
@@ -131,18 +131,22 @@ class Transform:
             self.channel_freqs = np.zeros(len(self.j_channels))
             Wfreq = np.zeros((len(jvals), self.N), dtype=complex)
             for i, j in enumerate(jvals): 
-                if (j/self.q + 1/self.b) > 0:
+                if (j >= 0):
                     # Normal Channels
                     alpha_j = (1.0 / self.b) + (j / self.q)
                     wtime = np.sqrt(alpha_j) * self.wavelet.eval_analysis(alpha_j * self.time)
                 else: 
                     # Compensation Channels
-                    phase = np.exp(2j * np.pi * self.xi_1 * j * self.time / self.q)
-                    wtime = (1.0 / np.sqrt(self.b)) * self.wavelet.eval_analysis(self.time / self.b) * phase
-                
+                    #phase = np.exp(2j * np.pi * self.xi_1 * j * self.time / self.q)
+                    #wtime = (1.0 / np.sqrt(self.b)) * self.wavelet.eval_analysis(self.time / self.b) * phase
+                    wtime = 100*(1.0 / np.sqrt(2*self.b)) * np.sinc(self.time / self.b/2) * signal.windows.tukey(self.N, alpha=0.3)
+                    # TODO: Remove hardcoding of 100 and change Mc to Boolean?
+
+
                 # Calculate FFT of wavelet filter
                 Wfreq[i,:] = np.fft.fft(wtime)
                 self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:self.N//2]))]
+
         elif self.scales == 'dyadic':
             # 1) Evaluate unscaled wavelet in time domain
             wavelet_unscaled = self.wavelet.eval_analysis(self.time)
@@ -185,7 +189,7 @@ class Transform:
         Pad the data to the nearest power of 2 for FFT.
         """
         if mode is not None:
-            target_length = int(2 ** np.ceil(np.log2(self.N_orig)))
+            target_length = int(2 ** np.ceil(np.log2(self.N_orig*4)))
             initial_pad = (target_length - self.N_orig) // 2
             data = np.pad(data, initial_pad, mode=mode)
             data *= signal.windows.tukey(data.shape[-1], alpha=0.3)
@@ -279,7 +283,48 @@ class Transform:
         effective_support = t_high - t_low
         return effective_support, t_low, t_high
     
-    def power_scalogram(self, coeffs, cmap='viridis', vmin=None, vmax=None, 
+
+    def enforce_orthagonality(self, eps=1e-5):
+        """
+        Optimize enforcement of orthogonality by precomputing the time-domain
+        wavelets and vectorizing the inner loop.
+        """
+        # Precompute inverse FFT of all wavelet scales.
+        X = np.fft.ifft(self.Wfreq, axis=1)
+        N = self.N  # For brevity in division later.
+
+        # Initialize selected indices based on Mc.
+        if self.Mc == 0:
+            selected_indices = [0]
+        else:
+            selected_indices = [0, 1]
+
+        current_index = selected_indices[-1]
+        total_scales = self.M + self.Mc
+
+        # Loop until we've processed all scales.
+        while current_index < total_scales - 1:
+            # Compute dot products with all remaining scales in one go.
+            # X[current_index] is the current scale.
+            # Compare against scales from current_index+1 to end.
+            dots = np.dot(X[current_index], X[current_index+1:].conj().T) / N
+
+            # Find the first index where the orthogonality condition holds.
+            valid_indices = np.where(np.abs(dots) < eps)[0]
+            if valid_indices.size == 0:
+                # No further scale satisfies the condition.
+                break
+
+            # The actual next index in the original array.
+            next_index = current_index + 1 + valid_indices[0]
+            selected_indices.append(next_index)
+            current_index = next_index
+
+        # Update the frequency-domain wavelets using the selected indices.
+        self.Wfreq = np.fft.fft(X[selected_indices, :], axis=1)
+        self.Sfreq = np.sum(np.abs(self.Wfreq)**2, axis=0)
+    
+    def scalogram(self, coeffs, cmap='viridis', vmin=None, vmax=None, 
                         y_tick_steps=5, figsize=(10, 6), title = 'Wavelet Coefficients Power'):
         """
         Plot the power of the wavelet coefficients.
