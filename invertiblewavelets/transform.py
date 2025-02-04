@@ -42,7 +42,7 @@ class Transform:
         
         
         self.data = np.asarray(data, dtype=float)
-        self.N = None                                   # Number of samples
+        self.N = self.data.shape[-1]                    # Number of samples
         self.N_orig = self.data.shape[-1]
         self.fs = fs                                    # Sampling frequency
         self.wavelet = wavelet                          # Wavelet class that includes wavelet.eval_analysis(t)
@@ -104,10 +104,10 @@ class Transform:
         self.s_max = self.b
 
         if self.q is None:
-            self.q = self.b
+            self.q = 5*self.b
 
         if self.M is None:
-            self.M = int(self.q*(self.fs/2 - 1/self.b))
+            self.M = int(self.q*(self.fs/2 - 1/self.b))+1
             if self.M < 1:
                 self.M = 4
 
@@ -139,13 +139,16 @@ class Transform:
                     # Compensation Channels
                     #phase = np.exp(2j * np.pi * self.xi_1 * j * self.time / self.q)
                     #wtime = (1.0 / np.sqrt(self.b)) * self.wavelet.eval_analysis(self.time / self.b) * phase
-                    wtime = 100*(1.0 / np.sqrt(2*self.b)) * np.sinc(self.time / self.b/2) * signal.windows.tukey(self.N, alpha=0.3)
+                    wtime = (1.0 / np.sqrt(self.b)) * np.sinc(self.time / self.b * 2) * signal.windows.tukey(self.N, alpha=0.3)
                     # TODO: Remove hardcoding of 100 and change Mc to Boolean?
 
 
                 # Calculate FFT of wavelet filter
                 Wfreq[i,:] = np.fft.fft(wtime)
                 self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:self.N//2]))]
+
+            # Normalize the first channel to match the second channel
+            Wfreq[0] = Wfreq[0]/ np.max(np.abs(Wfreq[0])) * np.max(np.abs(Wfreq[1]))
 
         elif self.scales == 'dyadic':
             # 1) Evaluate unscaled wavelet in time domain
@@ -189,7 +192,7 @@ class Transform:
         Pad the data to the nearest power of 2 for FFT.
         """
         if mode is not None:
-            target_length = int(2 ** np.ceil(np.log2(self.N_orig*4)))
+            target_length = int(2 ** np.ceil(np.log2(self.N_orig*2)))
             initial_pad = (target_length - self.N_orig) // 2
             data = np.pad(data, initial_pad, mode=mode)
             data *= signal.windows.tukey(data.shape[-1], alpha=0.3)
