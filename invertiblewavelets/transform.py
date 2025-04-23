@@ -38,7 +38,7 @@ class Transform:
 
     def __init__(self, data, fs, wavelet=Cauchy(),
                 b=None, q = None, M=None, Mc=None, xi_1 = None,
-                pad_method='symmetric', scales='linear', dj = 1/4):
+                pad_method='symmetric', scales='linear', dj = 1/4, real=False):
         
         
         self.data = np.asarray(data, dtype=float)
@@ -49,7 +49,7 @@ class Transform:
         self.scales = scales                            # Frequency scale type: 'linear' or 'dyadic'
         self.dj = dj                                    # Dyadic scale spacing                       
         self.pad_method = pad_method                    # Padding method (See numpy.pad)
-
+        self.real = real
 
         # Pad data with Tukey window
         self.pad_width = 0
@@ -137,13 +137,11 @@ class Transform:
                     wtime = np.sqrt(alpha_j) * self.wavelet.eval_analysis(alpha_j * self.time)
                 else: 
                     # Compensation Channels
-                    #phase = np.exp(2j * np.pi * self.xi_1 * j * self.time / self.q)
-                    #wtime = (1.0 / np.sqrt(self.b)) * self.wavelet.eval_analysis(self.time / self.b) * phase
                     wtime = (1.0 / np.sqrt(self.b)) * np.sinc(self.time / self.b * 2) * signal.windows.tukey(self.N, alpha=0.3)
-                    # TODO: Remove hardcoding of 100 and change Mc to Boolean?
-
 
                 # Calculate FFT of wavelet filter
+                if(self.real): wtime = wtime.real
+
                 Wfreq[i,:] = np.fft.fft(wtime)
                 self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i,:self.N//2]))]
 
@@ -152,13 +150,13 @@ class Transform:
 
         elif self.scales == 'dyadic':
             # 1) Evaluate unscaled wavelet in time domain
-            wavelet_unscaled = self.wavelet.eval_analysis(self.time)
+            wavelet_unscaled = self.wavelet.eval_analysis(np.arange(1000)/10)
             
             # 2) FFT and find the index of the peak magnitude
             wavelet_unscaled_fft = np.fft.fft(wavelet_unscaled)
-            freqs = np.fft.fftfreq(len(wavelet_unscaled_fft), d=1.0/self.fs)
-            peak_idx = np.argmax(np.abs(wavelet_unscaled_fft))
-            center_freq = abs(freqs[peak_idx])  # take absolute value in case the bin is negative
+            freqs = np.fft.fftfreq(len(wavelet_unscaled_fft), d=1.0/10)
+            peak_idx = np.argmax(np.abs(wavelet_unscaled_fft[freqs > 0]))
+            center_freq = abs(freqs[freqs > 0][peak_idx])  # take absolute value in case the bin is negative
 
             # 3) Define the smallest scale from the center frequency
             #    (For a Morlet wavelet at scale=1 => wavelet center frequency ≈ center_freq.)
@@ -166,7 +164,9 @@ class Transform:
             
             # 4) Define the number of scales J
             dj = self.dj
+
             # For the largest scale, use e.g. the signal duration in seconds
+            print(self.s_max, s0, dj, center_freq)
             J = int(np.floor(np.log2(self.s_max / s0) / dj))
 
             # 5) Generate scales (flip if you prefer largest->smallest)
@@ -180,9 +180,10 @@ class Transform:
             
             for i, scale in enumerate(scales):
                 wtime = np.sqrt(scale) * self.wavelet.eval_analysis(self.time / scale)
+                if(self.real): wtime = wtime.real
                 Wfreq[i, :] = np.fft.fft(wtime)
                 # Grab channel frequency by looking at the peak in the FFT
-                self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i, :]))]
+                self.channel_freqs[i] = real_freqs[np.argmax(np.abs(Wfreq[i, :self.N//2]))]
 
            
         return Wfreq
@@ -286,45 +287,49 @@ class Transform:
         effective_support = t_high - t_low
         return effective_support, t_low, t_high
     
+    def compute_frequency_support(self, Wfreq, freqs, energy_fraction=0.99):
+        """
+        For each channel j, find the band [f_low[j], f_high[j]] 
+        that contains `energy_fraction` of the filter’s total power.
+        """
+        # Wfreq: shape (M, N), freqs: shape (N,)
+        P = np.abs(Wfreq[:, :self.N//2])**2                # power spectrum
+        E_tot = P.sum(axis=1)               # total energy per channel
+        cum = np.cumsum(P, axis=1)          # cumulative along freq‑axis
 
+        low_e  = (1 - energy_fraction)/2 * E_tot
+        high_e = (1 + energy_fraction)/2 * E_tot
+
+        # find first bin ≥ low_e and ≥ high_e, for each j
+        idx_low  = np.argmax(cum >= low_e[:,None],  axis=1)
+        idx_high = np.argmax(cum >= high_e[:,None], axis=1)
+
+        f_low  = freqs[idx_low]
+        f_high = freqs[idx_high]
+        return f_low, f_high
+    
     def enforce_orthagonality(self, eps=1e-5):
         """
         Optimize enforcement of orthogonality by precomputing the time-domain
         wavelets and vectorizing the inner loop.
         """
-        # Precompute inverse FFT of all wavelet scales.
-        X = np.fft.ifft(self.Wfreq, axis=1)
-        N = self.N  # For brevity in division later.
+        f_low, f_high = self.compute_frequency_support(self.Wfreq, self.freqs, energy_fraction=0.99)
 
-        # Initialize selected indices based on Mc.
-        if self.Mc == 0:
-            selected_indices = [0]
-        else:
-            selected_indices = [0, 1]
+        selected = [0] if self.Mc==0 else [0,1]
+        for j in range(max(selected)+1, self.Wfreq.shape[0]):
+            # check overlap fraction against each chosen channel
+            ok = True
+            for k in selected:
+                # length of the intersection
+                overlap = max(0, min(f_high[j], f_high[k]) - max(f_low[j], f_low[k]))
+                if overlap > eps:   # eps_f in Hz, or normalize by (f_high[j]-f_low[j])
+                    ok = False
+                    break
+            if ok:
+                selected.append(j)
 
-        current_index = selected_indices[-1]
-        total_scales = self.M + self.Mc
-
-        # Loop until we've processed all scales.
-        while current_index < total_scales - 1:
-            # Compute dot products with all remaining scales in one go.
-            # X[current_index] is the current scale.
-            # Compare against scales from current_index+1 to end.
-            dots = np.dot(X[current_index], X[current_index+1:].conj().T) / N
-
-            # Find the first index where the orthogonality condition holds.
-            valid_indices = np.where(np.abs(dots) < eps)[0]
-            if valid_indices.size == 0:
-                # No further scale satisfies the condition.
-                break
-
-            # The actual next index in the original array.
-            next_index = current_index + 1 + valid_indices[0]
-            selected_indices.append(next_index)
-            current_index = next_index
-
-        # Update the frequency-domain wavelets using the selected indices.
-        self.Wfreq = np.fft.fft(X[selected_indices, :], axis=1)
+        # now subset once:
+        self.Wfreq = self.Wfreq[selected, :]
         self.Sfreq = np.sum(np.abs(self.Wfreq)**2, axis=0)
     
     def scalogram(self, coeffs, cmap='viridis', vmin=None, vmax=None, 

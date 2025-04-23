@@ -111,3 +111,14 @@ class Testlet:
         #wavelet =np.exp(2j*np.pi*t)*windows.gaussian(t.shape[-1], self.alpha) ## Constant window
         wavelet = signal.square(2 * np.pi * t) * windows.gaussian(t.shape[-1], self.alpha)
         return wavelet
+    
+class Synclet:
+    def __init__(self, alpha = .3):
+        """
+        TODO
+        """
+        self.alpha = alpha
+
+    def eval_analysis(self, t):
+        wavelet = (np.sinc(t/np.sqrt(2)) - np.sinc(t*np.sqrt(2))) * signal.windows.tukey(len(t), alpha=self.alpha)
+        return wavelet
