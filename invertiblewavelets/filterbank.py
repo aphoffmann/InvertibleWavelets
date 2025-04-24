@@ -38,6 +38,7 @@ class FilterBank(ABC):
         self._init_params(**params)
         self.j_channels = self._define_channel_indices()
         self.Wfreq, self.channel_freqs = self._compute_filters()
+        self.Wtime = np.fft.ifft(self.Wfreq, axis=1)
 
     @abstractmethod
     def _init_params(self, **params):
@@ -177,7 +178,7 @@ class DyadicFilterBank(FilterBank):
         oversamp = 8
         L = 1024
         t = np.arange(L * oversamp) / (self.fs * oversamp)
-        w = self.wavelet.eval_analysis(t)
+        w = self.wavelet.eval_analysis(t).real
         W = np.fft.rfft(w)
         freqs = np.fft.rfftfreq(W.size * 2 - 2, d=1 / (self.fs * oversamp))
 
