@@ -28,10 +28,10 @@ class Transform:
     # INIT
     # ------------------------------------------------------------
     def __init__(self, data, fs, filterbank, pad_method="symmetric"):
-        # ---------------- raw signal & padding ----------------
+        # ---------------- Input Data --------------------------
         self.fs = fs
-        self.x_raw = np.asarray(data, float)
-        self.N_orig = self.x_raw.size
+        self.data = np.asarray(data, float)
+        self.N_orig = self.data.size
         self.pad_method = pad_method
 
         # ---------------- filterbank --------------------------
@@ -41,81 +41,160 @@ class Transform:
         self.fb_len = self.Wfreq.shape[-1]
         self.n_channels = self.Wfreq.shape[0]
 
-        # ---------------- global FFT length -------------------
-        pow2_len = 2 ** int(np.ceil(np.log2(self.N_orig * 2)))
-        self.N_fft = max(pow2_len, self.fb_len)
-        self.pad_left = (self.N_fft - self.N_orig) // 2   # << we need this early
-
-        # ---------------- build sym‑padded bank ---------------
-        if self.fb_len < self.N_fft:
-            pad = self.N_fft - self.fb_len
-            lp, rp = pad // 2, pad - pad // 2
-            Wc = np.fft.ifftshift(self.Wfreq, axes=1)      # DC → centre
-            Wc = np.pad(Wc, ((0, 0), (lp, rp)))            # symmetric zeros
-            self.Wfreq_full = np.fft.fftshift(Wc, axes=1)  # back to FFT order
-        else:
-            self.Wfreq_full = self.Wfreq.copy()
-
         # ---------------- phase‑align by pad_left -------------
-        freqs_full = np.fft.fftfreq(self.N_fft, d=1 / self.fs)
-        phase = np.exp(-1j * 2 * np.pi * freqs_full * self.pad_left)
-        self.Wfreq_full *= phase[np.newaxis, :]
-        self.Wfreq *= phase[: self.fb_len][np.newaxis, :]
+        self.freqs = np.fft.fftfreq(self.fb_len)
+        self.phase_shift = np.exp(-1j * 2 * np.pi * self.freqs * (self.fb_len / 2))
+        #self.Wfreq *= self.phase_shift[np.newaxis, :]
 
         # ---------------- frame operator ----------------------
-        self.Sfreq = np.sum(np.abs(self.Wfreq_full) ** 2, axis=0)
+        self.Sfreq = np.sum(np.abs(self.Wfreq) ** 2, axis=0)
         self.Sfreq[self.Sfreq < 1e-12] = 1e-12
 
         # ---------------- pad the signal ----------------------
-        self.x_padded = self._pad_and_taper(self.x_raw)
+        self.pad_width = 0
+        self.N_padded = self.N_orig         
+        self.data = self._pad_and_taper(self.data)
+
+        # ---------------- Save the result ----------------------
+        self.coefficients = None
 
     # ------------------------------------------------------------
     # INTERNAL UTILITIES
     # ------------------------------------------------------------
-    def _pad_and_taper(self, x):
+    def _pad_and_taper(self, data):
         """Symmetric‑pad *x* to *N_fft* and Tukey‑taper only new edges."""
-        pad_total = self.N_fft - x.size
-        if pad_total <= 0:
-            return x[: self.N_fft]
-        left = pad_total // 2
-        right = pad_total - left
-        if(self.pad_method == 'constant'): 
-            padded = np.pad(x, (left, right), mode=self.pad_method, constant_values=(0,0))
-        else: 
-            padded = np.pad(x, (left, right), mode=self.pad_method,)
-
-        if left == 0:
-            return padded
-        # edge‑only taper
-        window = np.ones(self.N_fft)
-        taper = signal.windows.tukey(2 * left, alpha=1.0)
-        window[:left] = taper[:left]
-        window[-right:] = taper[-left:]
-        return padded * window
-
+        self.N_orig = data.shape[-1]
+        if self.pad_method is not None:
+            target_length = int(2 ** np.ceil(np.log2(self.N_orig*2)))
+            initial_pad = (target_length - self.N_orig) // 2
+            data = np.pad(data, initial_pad, mode=self.pad_method)
+            data *= signal.windows.tukey(data.shape[-1], alpha=0.3)
+            self.N_padded = data.shape[-1]
+            self.pad_width = initial_pad
+        return data
     # ------------------------------------------------------------
     # FORWARD / INVERSE
     # ------------------------------------------------------------
-    def forward(self, new_data=None):
+    def forward(self, new_data=None, trim = True):
         if new_data is not None:
             new_data = np.asarray(new_data, float)
             if new_data.size != self.N_orig:
                 raise ValueError(
                     f"new_data length {new_data.size} ≠ original {self.N_orig}"
                 )
-            self.x_padded = self._pad_and_taper(new_data)
+            self.data = self._pad_and_taper(new_data)
 
-        F = np.fft.fft(self.x_padded, n=self.N_fft)
-        # multiply by the full‑length bank for every channel
-        coeffs = np.fft.ifft(self.Wfreq_full * F, axis=1)
-        return coeffs
+        Lx  = self.N_padded                      # padded length of input
+        Lh  = self.Wfreq.shape[1]                # length of each FIR channel
 
-    def inverse(self, coeffs):
-        Cf = np.fft.fft(coeffs, n=self.N_fft, axis=1)
-        Xf = np.sum(np.conj(self.Wfreq_full) * Cf, axis=0) / self.Sfreq
-        x_full = np.fft.ifft(Xf).real
-        return x_full[self.pad_left : self.pad_left + self.N_orig]
+        # ========  short-signal path (fits one FFT)  ==================
+        if Lx <= Lh:
+            self.Wfreq *= self.phase_shift[np.newaxis, :]
+            N_fft = Lh                           # same rule you had before
+            F = np.fft.fft(self.data, n=N_fft)
+            out = np.fft.ifft(self.Wfreq * F, n = Lh, axis=1)
+            self.coefficients = out
 
+            if trim:
+                delay   = (Lh - 1)//2
+                rolled  = np.roll(out, -delay, axis=1)
+                out = rolled[:, self.pad_width:self.pad_width + self.N_orig]
+
+
+            return out
+
+        # ========  long-signal path (overlap-add)  ============================
+        N_fft = int(2 ** np.ceil(np.log2(Lh - 1)))   # single grid for both operands
+        hop   = N_fft - Lh + 1
+        Wlong = self._filters_on_grid(N_fft)              # <- use the helper
+        n_sc  = Wlong.shape[0]
+
+        out_len = Lx + Lh - 1
+        out     = np.zeros((n_sc, out_len), dtype=complex)
+
+        for k0 in range(0, Lx, hop):
+            blk   = self.data[k0:k0 + hop]
+            blk   = np.pad(blk, (0, N_fft - blk.size))
+            X_blk = np.fft.fft(blk, n=N_fft)
+            Y_blk = np.fft.ifft(Wlong * X_blk, axis=1)
+
+            end = k0 + N_fft
+            if end > out_len:               # trim **only** the final block tail
+                Y_blk = Y_blk[:, : out_len - k0]
+                end   = out_len
+            out[:, k0:end] += Y_blk
+
+        self.coefficients = out
+
+        if trim:
+            out = np.roll(out, self.N_orig//2)[:,self.pad_width:self.pad_width+self.N_orig]
+
+        return(out)
+
+    def inverse(self, coeffs = None):
+        if(coeffs is None):
+            coeffs = self.coefficients
+            
+        Lx  = self.N_padded
+        Lh  = self.Wfreq.shape[1]
+
+        # ========  short-signal path  =================================
+        if Lx <= Lh:
+            N_fft = Lh
+            Cf = np.fft.fft(coeffs, n = Lh, axis=1)
+            Xf = np.sum(np.conj(self.Wfreq) * Cf, axis=0) / self.Sfreq
+            x_full = np.fft.ifft(Xf)
+            return x_full[self.pad_width : self.pad_width + self.N_orig]
+
+        # ========  long-signal path (overlap-add)  ====================
+        Lx_full = coeffs.shape[1]  # Now Lx + Lh - 1
+        N_fft = int(2 ** np.ceil(np.log2(Lx_full + Lh - 1)))
+        hop = N_fft - Lh + 1
+
+        Wlong  = self._filters_on_grid(N_fft)             # <- helper again
+        n_sc   = Wlong.shape[0]
+
+        Sf     = (np.abs(Wlong) ** 2).sum(axis=0).real
+        eps    = 1e-12 * Sf.max()
+        Sf_inv = np.where(Sf > eps, 1.0 / Sf, 0.0)        # numerical floor
+
+        out_len = Lx + Lh - 1
+        out     = np.zeros(out_len, dtype=complex)
+
+        for k0 in range(0, Lx, hop):
+            k1 = min(k0 + hop, Lx_full)
+            seg = coeffs[:, k0:k1]
+
+            seg_pad = np.zeros((n_sc, N_fft), dtype=complex)
+            seg_pad[:, :seg.shape[1]] = seg
+            Cf_blk  = np.fft.fft(seg_pad, axis=1)
+
+            X_blk = (np.conj(Wlong) * Cf_blk).sum(axis=0) * Sf_inv
+            x_blk = np.fft.ifft(X_blk, n=N_fft)
+
+            end = k0 + N_fft
+            if end > out_len:
+                x_blk = x_blk[: out_len - k0]
+                end   = out_len
+            out[k0:end] += x_blk
+
+        return out[self.pad_width : self.pad_width + self.N_orig].real
+
+    def _filters_on_grid(self, N_fft: int):
+        """
+        Return the filter-bank spectra resampled onto an FFT grid of length N_fft.
+        If they already live on that grid the original array is returned.
+        """
+        if self.Wfreq.shape[1] == N_fft:
+            return self.Wfreq                  # nothing to do
+
+        Lh  = self.Wfreq.shape[1]
+        Hf  = np.zeros((self.Wfreq.shape[0], N_fft), dtype=complex)
+        for i in range(self.Wfreq.shape[0]):
+            h  = np.fft.ifft(self.Wfreq[i], n=Lh)      # impulse response
+            h  = np.pad(h, (0, N_fft - Lh))            # zero-pad in **time**
+            Hf[i] = np.fft.fft(h, n=N_fft)             # back to frequency
+        return Hf
 
     # ------------------------------------------------------------
     # ORTHOGONALITY SUPPORT
@@ -161,35 +240,20 @@ class Transform:
     def scalogram(
         self,
         coeffs,
-        *,
         cmap="viridis",
         y_tick_steps=5,
         figsize=(10, 6),
         title="Wavelet Coefficient Log‑Power",
         vmin=None,
         vmax=None,
-        interpolation=None,
-        align_zero=True,
+        interpolation='none',
     ):
-        """Plot log‑power scalogram.
 
-        Parameters
-        ----------
-        align_zero : bool, default True
-            If *True* the coefficient matrix is circularly rolled so that
-            sample index 0 of the **unpadded** signal is displayed at the
-            left edge.  This compensates for the `‑N/2` phase‑shift applied
-            to every filter when the bank was built.
-        """
-        # optional circular shift so that time‑zero is column 0
-        if align_zero:
-            coeffs = np.roll(coeffs, -self.pad_left, axis=1)
 
-        # window corresponding to genuine (unpadded) data
-        coeffs_view = coeffs[:, : self.N_orig]
-        t_axis = np.linspace(0, self.N_orig / self.fs, coeffs_view.shape[1])
+        n_sc, n_t = coeffs.shape
+        t_axis = np.linspace(0, n_sc / self.fs, coeffs.shape[1])
 
-        power = np.abs(coeffs_view) ** 2
+        power = np.abs(coeffs) ** 2
 
         plt.figure(figsize=figsize)
         plt.imshow(
@@ -210,62 +274,3 @@ class Transform:
         plt.colorbar(label="Log Power")
         plt.tight_layout()
 
-
-    def phasegram(
-        self,
-        coeffs,
-        *,
-        cmap="twilight",
-        y_tick_steps=5,
-        figsize=(10, 6),
-        title="Unwrapped instantaneous phase",
-        interpolation=None,
-        align_zero=True,
-    ):
-        """
-        Plot an unwrapped-phase scalogram (phase vs time vs scale).
-
-        Parameters
-        ----------
-        coeffs : ndarray  (n_scales, n_samples_pad)
-            Complex wavelet coefficients returned by Transform.forward().
-        cmap : str
-            Cyclic colormap (default 'twilight' shows phase nicely).
-        align_zero : bool, default True
-            Roll coeffs left by `pad_left` so that sample-0 of the *unpadded*
-            signal appears at x = 0 s.
-        """
-        # 1) optional circular roll so padded left edge lines up with t=0
-        if align_zero:
-            coeffs = np.roll(coeffs, -self.pad_left, axis=1)
-
-        # 2) discard the padded margins in time
-        coeffs = coeffs[:, : self.N_orig]          # shape (n_scales, N_orig)
-        t_axis  = np.linspace(0, self.N_orig / self.fs, coeffs.shape[1])
-
-        # 3) unwrap instantaneous phase for each scale
-        phase = np.unwrap(np.angle(coeffs), axis=1)
-
-        # 4) subtract phase at t=0 so every row starts at 0 rad
-        phase -= phase[:, [0]]
-
-        # 5) plot
-        plt.figure(figsize=figsize)
-        plt.imshow(
-            phase,
-            origin="lower",
-            aspect="auto",
-            extent=[t_axis[0], t_axis[-1],
-                    self.channel_freqs[0], self.channel_freqs[-1]],
-            cmap=cmap,
-            interpolation=interpolation,
-        )
-        plt.title(title)
-        plt.xlabel("Time [s]")
-        plt.ylabel("Frequency [Hz]")
-        yt = np.linspace(self.channel_freqs[0],
-                        self.channel_freqs[-1],
-                        y_tick_steps)
-        plt.yticks(yt, [f"{y:.2f}" for y in yt])
-        cbar = plt.colorbar(label="Phase [rad]")
-        plt.tight_layout()
