@@ -1,2 +1,3 @@
 from .transform import Transform
-from .wavelet_classes import *
+from .wavelets import *
+from .filterbank import *
