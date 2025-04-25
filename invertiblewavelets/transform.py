@@ -22,7 +22,6 @@ from .wavelets import Morlet, Cauchy
 
 __all__ = ["Transform"]
 class Transform:
-    """Non‑decimated wavelet transform using a pre‑built FilterBank."""
 
     # ------------------------------------------------------------
     # INIT
@@ -62,7 +61,7 @@ class Transform:
     # INTERNAL UTILITIES
     # ------------------------------------------------------------
     def _pad_and_taper(self, data):
-        """Symmetric‑pad *x* to *N_fft* and Tukey‑taper only new edges."""
+        """Symmetric-pad *x* to *N_fft* and Tukey-taper only new edges."""
         self.N_orig = data.shape[-1]
         if self.pad_method is not None:
             target_length = int(2 ** np.ceil(np.log2(self.N_orig*2)))
@@ -89,17 +88,14 @@ class Transform:
 
         # ========  short-signal path (fits one FFT)  ==================
         if Lx <= Lh:
-            self.Wfreq *= self.phase_shift[np.newaxis, :]
+            shifted = self.Wfreq * self.phase_shift[np.newaxis, :]
             N_fft = Lh                           # same rule you had before
             F = np.fft.fft(self.data, n=N_fft)
-            out = np.fft.ifft(self.Wfreq * F, n = Lh, axis=1)
+            out = np.fft.ifft(shifted * F, n = Lh, axis=1)
             self.coefficients = out
 
             if trim:
-                delay   = (Lh - 1)//2
-                rolled  = np.roll(out, -delay, axis=1)
-                out = rolled[:, self.pad_width:self.pad_width + self.N_orig]
-
+                out = out[:,:Lx][:, self.pad_width:-self.pad_width]
 
             return out
 
@@ -140,9 +136,10 @@ class Transform:
 
         # ========  short-signal path  =================================
         if Lx <= Lh:
+            shifted = self.Wfreq * self.phase_shift[np.newaxis, :]
             N_fft = Lh
             Cf = np.fft.fft(coeffs, n = Lh, axis=1)
-            Xf = np.sum(np.conj(self.Wfreq) * Cf, axis=0) / self.Sfreq
+            Xf = np.sum(np.conj(shifted) * Cf, axis=0) / self.Sfreq
             x_full = np.fft.ifft(Xf)
             return x_full[self.pad_width : self.pad_width + self.N_orig]
 
