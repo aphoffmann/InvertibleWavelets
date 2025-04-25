@@ -26,12 +26,12 @@ class Transform:
     # ------------------------------------------------------------
     # INIT
     # ------------------------------------------------------------
-    def __init__(self, data, fs, filterbank, pad_method="symmetric"):
+    def __init__(self, data, fs, filterbank):
         # ---------------- Input Data --------------------------
         self.fs = fs
         self.data = np.asarray(data, float)
-        self.N_orig = self.data.size
-        self.pad_method = pad_method
+        self.N = self.data.size
+
 
         # ---------------- filterbank --------------------------
         self.fb = filterbank
@@ -40,51 +40,86 @@ class Transform:
         self.fb_len = self.Wfreq.shape[-1]
         self.n_channels = self.Wfreq.shape[0]
 
-        # ---------------- phase‑align by pad_left -------------
+        # ---------------- phase‑align --------------------------
         self.freqs = np.fft.fftfreq(self.fb_len)
         self.phase_shift = np.exp(-1j * 2 * np.pi * self.freqs * (self.fb_len / 2))
-        #self.Wfreq *= self.phase_shift[np.newaxis, :]
+
 
         # ---------------- frame operator ----------------------
         self.Sfreq = np.sum(np.abs(self.Wfreq) ** 2, axis=0)
         self.Sfreq[self.Sfreq < 1e-12] = 1e-12
 
-        # ---------------- pad the signal ----------------------
-        self.pad_width = 0
-        self.N_padded = self.N_orig         
-        self.data = self._pad_and_taper(self.data)
-
         # ---------------- Save the result ----------------------
         self.coefficients = None
 
     # ------------------------------------------------------------
-    # INTERNAL UTILITIES
+    # INTERNAL FUNCTIONS
     # ------------------------------------------------------------
-    def _pad_and_taper(self, data):
-        """Symmetric-pad *x* to *N_fft* and Tukey-taper only new edges."""
-        self.N_orig = data.shape[-1]
-        if self.pad_method is not None:
-            target_length = int(2 ** np.ceil(np.log2(self.N_orig*2)))
-            initial_pad = (target_length - self.N_orig) // 2
-            data = np.pad(data, initial_pad, mode=self.pad_method)
-            data *= signal.windows.tukey(data.shape[-1], alpha=0.3)
-            self.N_padded = data.shape[-1]
-            self.pad_width = initial_pad
-        return data
+    def _trim_coeffs(self, full):
+        """
+        Return an (n_ch, Lx) matrix that can be passed straight back to inverse().
+        • short-signal branch : keep the *front* Lx samples
+        • long -signal branch : keep the centre Lx samples
+        """
+        Lx, Lh = self.N, self.Wfreq.shape[1]
+        full_len = full.shape[1]
+
+        if full_len == Lx:           # already 'same'
+            return full
+
+        # ---- short-signal path ----
+        if Lx <= Lh:                 
+            return full[:, :Lx]      # keep leading segment
+
+        # ---- long-signal path ----
+        start = (full_len - Lx) // 2
+        end   = start + Lx
+        return full[:, start:end]
+    
+    def _untrim_coeffs(self, short):
+        """
+        Restore the coefficient block to the length expected by the
+        inverse routine:
+            • Lh           when Lx ≤ Lh   (short-signal path)
+            • Lx + Lh - 1  otherwise      (overlap-add path)
+        """
+        n_ch, Ltrim = short.shape
+        Lx, Lh = self.N, self.Wfreq.shape[1]
+
+        # ---- short-signal path ----
+        if Lx <= Lh:                        
+            full = np.zeros((n_ch, Lh), dtype=short.dtype)
+            full[:, :Ltrim] = short           # place at the front
+            full[:, Ltrim:] = self.coefficients[:, Ltrim:]
+            return full
+
+        # ---- long-signal path ----
+        full_len  = Lx + Lh - 1
+        pad_left  = (full_len - Ltrim) // 2
+        full = np.zeros((n_ch, full_len), dtype=short.dtype)
+        full[:, pad_left:pad_left + Ltrim] = short
+        return full
+    
+    def _filters_on_grid(self, N_fft: int):
+        if self.Wfreq.shape[1] == N_fft:
+            return self.Wfreq                  # nothing to do
+
+        Lh  = self.Wfreq.shape[1]
+        Hf  = np.zeros((self.Wfreq.shape[0], N_fft), dtype=complex)
+        for i in range(self.Wfreq.shape[0]):
+            h  = np.fft.ifft(self.Wfreq[i], n=Lh)      # impulse response
+            h  = np.pad(h, (0, N_fft - Lh))            # zero-pad in **time**
+            Hf[i] = np.fft.fft(h, n=N_fft)             # back to frequency
+        return Hf
     # ------------------------------------------------------------
     # FORWARD / INVERSE
     # ------------------------------------------------------------
-    def forward(self, new_data=None, trim = True):
+    def forward(self, new_data=None, mode="same"):
         if new_data is not None:
-            new_data = np.asarray(new_data, float)
-            if new_data.size != self.N_orig:
-                raise ValueError(
-                    f"new_data length {new_data.size} ≠ original {self.N_orig}"
-                )
-            self.data = self._pad_and_taper(new_data)
+            self.data = np.asarray(new_data, float)
+            self.N = self.data.size
 
-        Lx  = self.N_padded                      # padded length of input
-        Lh  = self.Wfreq.shape[1]                # length of each FIR channel
+        Lx, Lh = self.N, self.Wfreq.shape[1]
 
         # ========  short-signal path (fits one FFT)  ==================
         if Lx <= Lh:
@@ -94,45 +129,43 @@ class Transform:
             out = np.fft.ifft(shifted * F, n = Lh, axis=1)
             self.coefficients = out
 
-            if trim:
-                out = out[:,:Lx][:, self.pad_width:-self.pad_width]
-
-            return out
-
         # ========  long-signal path (overlap-add)  ============================
-        N_fft = int(2 ** np.ceil(np.log2(Lh - 1)))   # single grid for both operands
-        hop   = N_fft - Lh + 1
-        Wlong = self._filters_on_grid(N_fft)              # <- use the helper
-        n_sc  = Wlong.shape[0]
+        else:
+            N_fft = int(2 ** np.ceil(np.log2(Lh - 1)))   # single grid for both operands
+            hop   = N_fft - Lh + 1
+            Wlong = self._filters_on_grid(N_fft)              # <- use the helper
+            n_sc  = Wlong.shape[0]
 
-        out_len = Lx + Lh - 1
-        out     = np.zeros((n_sc, out_len), dtype=complex)
+            out_len = Lx + Lh - 1
+            out     = np.zeros((n_sc, out_len), dtype=complex)
 
-        for k0 in range(0, Lx, hop):
-            blk   = self.data[k0:k0 + hop]
-            blk   = np.pad(blk, (0, N_fft - blk.size))
-            X_blk = np.fft.fft(blk, n=N_fft)
-            Y_blk = np.fft.ifft(Wlong * X_blk, axis=1)
+            for k0 in range(0, Lx, hop):
+                blk   = self.data[k0:k0 + hop]
+                blk   = np.pad(blk, (0, N_fft - blk.size))
+                X_blk = np.fft.fft(blk, n=N_fft)
+                Y_blk = np.fft.ifft(Wlong * X_blk, axis=1)
 
-            end = k0 + N_fft
-            if end > out_len:               # trim **only** the final block tail
-                Y_blk = Y_blk[:, : out_len - k0]
-                end   = out_len
-            out[:, k0:end] += Y_blk
+                end = k0 + N_fft
+                if end > out_len:               # trim **only** the final block tail
+                    Y_blk = Y_blk[:, : out_len - k0]
+                    end   = out_len
+                out[:, k0:end] += Y_blk
 
-        self.coefficients = out
+            self.coefficients = out
 
-        if trim:
-            out = np.roll(out, self.N_orig//2)[:,self.pad_width:self.pad_width+self.N_orig]
-
-        return(out)
+        if mode == "full":
+            return out
+        
+        return self._trim_coeffs(out)
 
     def inverse(self, coeffs = None):
         if(coeffs is None):
             coeffs = self.coefficients
-            
-        Lx  = self.N_padded
-        Lh  = self.Wfreq.shape[1]
+        
+        Lx, Lh = self.N, self.Wfreq.shape[1]
+
+        if coeffs.shape[1] >= Lx:            # user passed the short form
+            coeffs = self._untrim_coeffs(coeffs)
 
         # ========  short-signal path  =================================
         if Lx <= Lh:
@@ -141,7 +174,7 @@ class Transform:
             Cf = np.fft.fft(coeffs, n = Lh, axis=1)
             Xf = np.sum(np.conj(shifted) * Cf, axis=0) / self.Sfreq
             x_full = np.fft.ifft(Xf)
-            return x_full[self.pad_width : self.pad_width + self.N_orig]
+            return x_full[:Lx].real
 
         # ========  long-signal path (overlap-add)  ====================
         Lx_full = coeffs.shape[1]  # Now Lx + Lh - 1
@@ -175,23 +208,9 @@ class Transform:
                 end   = out_len
             out[k0:end] += x_blk
 
-        return out[self.pad_width : self.pad_width + self.N_orig].real
+        return out[:Lx].real
 
-    def _filters_on_grid(self, N_fft: int):
-        """
-        Return the filter-bank spectra resampled onto an FFT grid of length N_fft.
-        If they already live on that grid the original array is returned.
-        """
-        if self.Wfreq.shape[1] == N_fft:
-            return self.Wfreq                  # nothing to do
 
-        Lh  = self.Wfreq.shape[1]
-        Hf  = np.zeros((self.Wfreq.shape[0], N_fft), dtype=complex)
-        for i in range(self.Wfreq.shape[0]):
-            h  = np.fft.ifft(self.Wfreq[i], n=Lh)      # impulse response
-            h  = np.pad(h, (0, N_fft - Lh))            # zero-pad in **time**
-            Hf[i] = np.fft.fft(h, n=N_fft)             # back to frequency
-        return Hf
 
     # ------------------------------------------------------------
     # ORTHOGONALITY SUPPORT
@@ -203,6 +222,23 @@ class Transform:
         self.n_channels = len(idx)
         self.Sfreq = np.sum(np.abs(self.Wfreq_full) ** 2, axis=0)
         self.Sfreq[self.Sfreq < 1e-12] = 1e-12
+
+
+    # ------------------------------------------------------------
+    # PADDING SUPPORT
+    # ------------------------------------------------------------
+    def pad(self, data):
+        x = np.array([np.flip(data), data, np.flip(data)]).flatten()
+        x *= signal.windows.tukey(len(x), 0.3)
+
+        "Pad up to next power of 2 with zeros"
+        return(x)
+
+    def unpad(self, signal):
+        """Unpad the signal by removing the first and last 1/3 of the signal"""
+        L = len(signal) // 3
+        return signal[L:-L]
+
 
     # legacy eps‑based method
     def enforce_orthogonality(self, eps=1e-5):
@@ -248,7 +284,7 @@ class Transform:
 
 
         n_sc, n_t = coeffs.shape
-        t_axis = np.linspace(0, n_sc / self.fs, coeffs.shape[1])
+        t_axis = np.linspace(0, n_t / self.fs, coeffs.shape[1])
 
         power = np.abs(coeffs) ** 2
 
