@@ -120,6 +120,7 @@ class LinearFilterBank(FilterBank):
             else:
                 wtime = (1.0 / np.sqrt(self.b)) * np.sinc(t / self.b * 2) * \
                         signal.windows.tukey(self.N, alpha=0.3)
+                wtime = signal.hilbert(wtime)
             if self.real:
                 wtime = wtime.real
             W[i, :] = np.fft.fft(wtime)
@@ -218,8 +219,11 @@ class DyadicFilterBank(FilterBank):
                 # sinc compensation below lowest dyadic channel
                 w_t = (1 / np.sqrt(scales[1])) * np.sinc(t / scales[1] * 2)
                 w_t *= signal.windows.tukey(self.N, alpha=0.3)
+                w_t = signal.hilbert(w_t)
+
             else:
                 w_t = np.sqrt(s) * self.wavelet.eval_analysis(t / s)
+
             if self.real:
                 w_t = w_t.real
             W[i] = np.fft.fft(w_t)

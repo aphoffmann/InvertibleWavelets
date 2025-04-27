@@ -44,7 +44,6 @@ class Transform:
         self.freqs = np.fft.fftfreq(self.fb_len)
         self.phase_shift = np.exp(-1j * 2 * np.pi * self.freqs * (self.fb_len / 2))
 
-
         # ---------------- frame operator ----------------------
         self.Sfreq = np.sum(np.abs(self.Wfreq) ** 2, axis=0)
         self.Sfreq[self.Sfreq < 1e-12] = 1e-12
@@ -141,7 +140,13 @@ class Transform:
 
             for k0 in range(0, Lx, hop):
                 blk   = self.data[k0:k0 + hop]
-                blk   = np.pad(blk, (0, N_fft - blk.size))
+                try:
+                    blk   = np.pad(blk, (0, N_fft - blk.size))
+                except ValueError:
+                    print("Error: Padding failed. Check the input data size.", N_fft, blk.size)
+                    print("blk:", blk.size, "N_fft:", N_fft)
+                    print("hop:", hop, "Lh:", Lh, "Lx:", Lx)
+                    raise(Exception("Padding failed."))
                 X_blk = np.fft.fft(blk, n=N_fft)
                 Y_blk = np.fft.ifft(Wlong * X_blk, axis=1)
 
@@ -222,23 +227,6 @@ class Transform:
         self.n_channels = len(idx)
         self.Sfreq = np.sum(np.abs(self.Wfreq_full) ** 2, axis=0)
         self.Sfreq[self.Sfreq < 1e-12] = 1e-12
-
-
-    # ------------------------------------------------------------
-    # PADDING SUPPORT
-    # ------------------------------------------------------------
-    def pad(self, data):
-        x = np.array([np.flip(data), data, np.flip(data)]).flatten()
-        x *= signal.windows.tukey(len(x), 0.3)
-
-        "Pad up to next power of 2 with zeros"
-        return(x)
-
-    def unpad(self, signal):
-        """Unpad the signal by removing the first and last 1/3 of the signal"""
-        L = len(signal) // 3
-        return signal[L:-L]
-
 
     # legacy eps‑based method
     def enforce_orthogonality(self, eps=1e-5):
