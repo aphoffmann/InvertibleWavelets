@@ -19,8 +19,6 @@ import numpy as np
 from scipy import signal
 
 
-
-
 class FilterBank(ABC):
     """
     Abstract base for any wavelet filterbank.
@@ -52,24 +50,6 @@ class FilterBank(ABC):
     def _compute_filters(self):
         pass
 
-    def compute_effective_support(self, t, energy_fraction=0.99):
-        """
-        Compute effective time support length containing given fraction of wavelet energy.
-        Returns (support_length, t_low, t_high).
-        """
-        psi = self.wavelet.eval_analysis(t)
-        energy = np.abs(psi)**2
-        dt = t[1] - t[0]
-        total_energy = np.sum(energy) * dt
-        cumulative = np.cumsum(energy) * dt
-        lower_energy = (1 - energy_fraction) / 2 * total_energy
-        upper_energy = (1 + energy_fraction) / 2 * total_energy
-        low_idx = np.searchsorted(cumulative, lower_energy)
-        high_idx = np.searchsorted(cumulative, upper_energy)
-        t_low = t[low_idx]
-        t_high = t[high_idx]
-        return t_high - t_low, t_low, t_high
-
 
 class LinearFilterBank(FilterBank):
     def _init_params(self, b=None, q=None, M=None, compensation=True, **_):
@@ -86,12 +66,11 @@ class LinearFilterBank(FilterBank):
         t -= np.mean(t)
 
         # Largest scale b
-        if self.b is None:
-            T_eff, _, _ = self.compute_effective_support(t)
-            T_sig = self.N / self.fs
-            margin = 0.1 * T_sig
-            self.b = (T_sig - margin) / T_eff
-        self.s_max = self.b
+        if self.b is None:                   # user did not specify
+            T_sig   = self.N / self.fs
+            margin  = 0.25 * T_sig           # keep 10 % head-room
+            T_wave  = self.wavelet.effective_half_width()
+            self.b  = max(1.0, (T_sig - margin) / (2*T_wave))
 
         # Scale resolution q
         if self.q is None:
@@ -150,15 +129,11 @@ class DyadicFilterBank(FilterBank):
         self.compensation = bool(compensation)
         self.s_max = s_max
 
-        if self.s_max is None:
-            # Estimate from effective time support of the *prototype* wavelet.
-            t = np.arange(self.N) / self.fs
-            t -= t.mean()
-            T_eff, _, _ = self.compute_effective_support(t)  # in seconds
-            T_sig = self.N / self.fs
-            margin = 0.10 * T_sig
-            # largest scale so that wavelet fits inside [-T_sig/2, T_sig/2]
-            self.s_max = max(1.0, (T_sig - margin) / T_eff)
+        if self.s_max is None:                   # user did not specify
+            T_sig   = self.N / self.fs
+            margin  = 0.25 * T_sig           # keep 10 % head-room
+            T_wave  = self.wavelet.effective_half_width()
+            self.s_max  = max(1.0, (T_sig - margin) / (2*T_wave))
 
     # Dyadic: channels are just the integer indices of the scale list
     def _define_channel_indices(self):

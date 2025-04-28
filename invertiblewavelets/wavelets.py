@@ -4,6 +4,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 from scipy import signal, fftpack
 from scipy.signal import windows
+from scipy.special import erfcinv
 
 
 __all__ = [
@@ -11,7 +12,6 @@ __all__ = [
     "Cauchy",
     "MexicanHat",
     "DoG",
-    "Haar",
 ]
 
 # ------------------------------------------------------------------
@@ -29,6 +29,12 @@ class Morlet:
         """
         self.fc = fc
         self.fb = fb
+
+    def effective_half_width(self, eps=1e-6, criterion="energy"):
+        if criterion == "ampl":
+            return np.sqrt(self.fb * np.log(1/eps))
+        
+        return np.sqrt(self.fb/2) * erfcinv(2*eps)
 
     def eval_analysis(self, t):
         """
@@ -52,6 +58,10 @@ class Cauchy:
         """
         self.alpha = float(alpha)
 
+    def effective_half_width(self, eps=1e-3):
+        # amplitude and energy have same algebraic fall-off
+        return (self.alpha/(2*np.pi))*np.sqrt(eps**(-2/(1+self.alpha)) - 1)
+
     def eval_analysis(self, t):
         """Continuous-time 'analysis' mother wavelet."""
         # factor^(-1 - alpha)
@@ -72,6 +82,9 @@ class MexicanHat:
         # ∫((1−t²)² e^{−t²}) dt = √π /2 for default scaling.
         self.norm = 2 / (np.sqrt(3) * np.pi**0.25)
 
+    def effective_half_width(self, eps=1e-8):
+        return np.sqrt(np.log(1/eps)) 
+
     def eval_analysis(self, t: np.ndarray):
         return self.norm * (1 - t**2) * np.exp(-t**2 / 2)
     
@@ -86,11 +99,11 @@ class DoG:
         Time scaling of the Gaussian envelope (sigma). Default 1.
     """
 
-    def __init__(self, n: int = 1, scale: float = 1.0):
+    def __init__(self, n: int = 1, sigma: float = 1.0):
         if n < 1:
             raise ValueError("Derivative order n must be >=1")
         self.n = int(n)
-        self.scale = float(scale)
+        self.sigma = float(sigma)
         # normalization constant to give unit energy at scale=1
         # For n‑th derivative of exp(−t²/2σ²), L2 norm squared =
         #   2^{n+1} n! √π / (2σ) / (2σ)^{2n}
@@ -109,24 +122,14 @@ class DoG:
             Hnm2, Hnm1 = Hnm1, Hn
         return Hn
 
+    def effective_half_width(self, eps=1e-3):
+        return(self.sigma * np.sqrt(2 * np.log(1/eps) + self.n))
+
     def eval_analysis(self, t: np.ndarray):
-        sigma = self.scale
-        x = t / sigma
+        x = t / self.sigma
         gauss = np.exp(-x**2 / 2)
         Hn = self._hermite(self.n, x)
-        coef = ((-1) ** self.n) / (sigma ** (self.n + 0.5))
+        coef = ((-1) ** self.n) / (self.sigma ** (self.n + 0.5))
         psi = coef * Hn * gauss
         # Normalize numerically to unit energy (optional for analysis)
-        return psi
-
-class Haar:
-    """Haar (Db1) wavelet: ψ(t)=1 on [0,0.5), −1 on [0.5,1)."""
-
-    def eval_analysis(self, t: ArrayLike):
-        t = np.asarray(t, float)
-        psi = np.zeros_like(t)
-        mask1 = (-0.5 <= t) & (t < 0.0)
-        mask2 = (0.0 <= t) & (t < 0.5)
-        psi[mask1] = 1.0
-        psi[mask2] = -1.0
         return psi

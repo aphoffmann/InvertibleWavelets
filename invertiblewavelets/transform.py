@@ -67,7 +67,7 @@ class Transform:
             return full
 
         # ---- short-signal path ----
-        if Lx <= Lh:                 
+        if Lx < Lh:                 
             return full[:, :Lx]      # keep leading segment
 
         # ---- long-signal path ----
@@ -84,9 +84,10 @@ class Transform:
         """
         n_ch, Ltrim = short.shape
         Lx, Lh = self.N, self.Wfreq.shape[1]
+        
 
         # ---- short-signal path ----
-        if Lx <= Lh:                        
+        if Lx < Lh:                        
             full = np.zeros((n_ch, Lh), dtype=short.dtype)
             full[:, :Ltrim] = short           # place at the front
             full[:, Ltrim:] = self.coefficients[:, Ltrim:]
@@ -97,6 +98,7 @@ class Transform:
         pad_left  = (full_len - Ltrim) // 2
         full = np.zeros((n_ch, full_len), dtype=short.dtype)
         full[:, pad_left:pad_left + Ltrim] = short
+        print(self.coefficients.shape, full.shape)
         return full
     
     def _filters_on_grid(self, N_fft: int):
@@ -121,7 +123,7 @@ class Transform:
         Lx, Lh = self.N, self.Wfreq.shape[1]
 
         # ========  short-signal path (fits one FFT)  ==================
-        if Lx <= Lh:
+        if Lx < Lh:
             shifted = self.Wfreq * self.phase_shift[np.newaxis, :]
             N_fft = Lh                           # same rule you had before
             F = np.fft.fft(self.data, n=N_fft)
@@ -173,7 +175,7 @@ class Transform:
             coeffs = self._untrim_coeffs(coeffs)
 
         # ========  short-signal path  =================================
-        if Lx <= Lh:
+        if Lx < Lh:
             shifted = self.Wfreq * self.phase_shift[np.newaxis, :]
             N_fft = Lh
             Cf = np.fft.fft(coeffs, n = Lh, axis=1)
