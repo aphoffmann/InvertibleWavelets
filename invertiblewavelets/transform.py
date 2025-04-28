@@ -98,7 +98,7 @@ class Transform:
         pad_left  = (full_len - Ltrim) // 2
         full = np.zeros((n_ch, full_len), dtype=short.dtype)
         full[:, pad_left:pad_left + Ltrim] = short
-        print(self.coefficients.shape, full.shape)
+
         return full
     
     def _filters_on_grid(self, N_fft: int):

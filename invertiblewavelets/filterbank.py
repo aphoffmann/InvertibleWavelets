@@ -32,6 +32,13 @@ class FilterBank(ABC):
         self.wavelet = wavelet
         self.fs = fs
         self.N = N
+
+        "Make N even for FFT"
+        if N % 2 == 1:
+            N += 1
+            self.N = N
+            print(f"Warning: N was odd, increased to {N} for FFT.")
+
         self.real = real
         self._init_params(**params)
         self.j_channels = self._define_channel_indices()
