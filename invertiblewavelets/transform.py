@@ -132,7 +132,7 @@ class Transform:
 
         # ========  long-signal path (overlap-add)  ============================
         else:
-            N_fft = int(2 ** np.ceil(np.log2(Lh - 1)))   # single grid for both operands
+            N_fft = int(2 ** (np.ceil(np.log2(Lh))+1))   # single grid for both operands
             hop   = N_fft - Lh + 1
             Wlong = self._filters_on_grid(N_fft)              # <- use the helper
             n_sc  = Wlong.shape[0]
@@ -184,36 +184,15 @@ class Transform:
             return x_full[:Lx].real
 
         # ========  long-signal path (overlap-add)  ====================
-        Lx_full = coeffs.shape[1]  # Now Lx + Lh - 1
-        N_fft = int(2 ** np.ceil(np.log2(Lx_full + Lh - 1)))
-        hop = N_fft - Lh + 1
+        "Instead of doing OLA in the inverse, we do the inverse per scale and then sum"
+        Lx, Lh = self.N, self.Wfreq.shape[1]
+        Lx_full = coeffs.shape[1]
 
-        Wlong  = self._filters_on_grid(N_fft)             # <- helper again
-        n_sc   = Wlong.shape[0]
+        N_fft = int(2 ** (np.ceil(np.log2(Lx + Lh - 1))))
+        n_sc = self.Wfreq.shape[0]
 
-        Sf     = (np.abs(Wlong) ** 2).sum(axis=0).real
-        eps    = 1e-12 * Sf.max()
-        Sf_inv = np.where(Sf > eps, 1.0 / Sf, 0.0)        # numerical floor
+        output_spectrum = np.zeros(N_fft, dtype=complex)
 
-        out_len = Lx + Lh - 1
-        out     = np.zeros(out_len, dtype=complex)
-
-        for k0 in range(0, Lx, hop):
-            k1 = min(k0 + hop, Lx_full)
-            seg = coeffs[:, k0:k1]
-
-            seg_pad = np.zeros((n_sc, N_fft), dtype=complex)
-            seg_pad[:, :seg.shape[1]] = seg
-            Cf_blk  = np.fft.fft(seg_pad, axis=1)
-
-            X_blk = (np.conj(Wlong) * Cf_blk).sum(axis=0) * Sf_inv
-            x_blk = np.fft.ifft(X_blk, n=N_fft)
-
-            end = k0 + N_fft
-            if end > out_len:
-                x_blk = x_blk[: out_len - k0]
-                end   = out_len
-            out[k0:end] += x_blk
 
         return out[:Lx].real
 
