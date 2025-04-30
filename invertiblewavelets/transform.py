@@ -124,6 +124,7 @@ class Transform:
             h  = np.pad(h, N_fft - Lh)            # zero-pad in **time**
             Hf[i] = np.fft.fft(h, n=N_fft)             # back to frequency
         return Hf
+    
     # ------------------------------------------------------------
     # FORWARD / INVERSE
     # ------------------------------------------------------------
@@ -228,46 +229,6 @@ class Transform:
 
 
         return out[Lh:Lh + Lx].real
-
-
-
-    # ------------------------------------------------------------
-    # ORTHOGONALITY SUPPORT
-    # ------------------------------------------------------------
-    def _apply_channel_subset(self, idx):
-        self.Wfreq = self.Wfreq[idx, :]
-        self.Wfreq_full = self.Wfreq_full[idx, :]
-        self.channel_freqs = self.channel_freqs[idx]
-        self.n_channels = len(idx)
-        self.Sfreq = np.sum(np.abs(self.Wfreq_full) ** 2, axis=0)
-        self.Sfreq[self.Sfreq < 1e-12] = 1e-12
-
-    # legacy eps‑based method
-    def enforce_orthogonality(self, eps=1e-5):
-        """Time‑domain orthogonality pruning (original fast dot‑product method).
-
-        Iteratively keeps the first channel, then looks for the next channel whose
-        time‑domain inner product with *all kept channels* is below *eps* (per sample).
-        Uses the full‑length IFFT of the filters, so it works regardless of
-        zero‑padding length.
-        """
-        # full‑length time‑domain wavelets (complex)
-        X_td = np.fft.ifft(self.Wfreq_full, axis=1)
-        N = self.N_fft
-        # decide if there are compensation channels
-        Mc = getattr(self.fb, "Mc", 0)
-        selected = [0] if Mc == 0 else [0, 1]
-        current = selected[-1]
-        while current < self.n_channels - 1:
-            # dot product of current with all remaining channels in one go
-            dots = np.dot(X_td[current], X_td[current + 1 :].conj().T) / N  # vector
-            valid = np.where(np.abs(dots) < eps)[0]
-            if valid.size == 0:
-                break  # no further orthogonal channel
-            next_idx = current + 1 + valid[0]
-            selected.append(next_idx)
-            current = next_idx
-        self._apply_channel_subset(np.array(selected, int))
 
     # ------------------------------------------------------------
     # SCALOGRAM PLOT
