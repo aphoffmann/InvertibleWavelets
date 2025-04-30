@@ -101,7 +101,7 @@ class Transform:
 
         return full
     
-    def _filters_on_grid(self, N_fft: int):
+    def _forward_filter_freq(self, N_fft: int):
         if self.Wfreq.shape[1] == N_fft:
             return self.Wfreq                  # nothing to do
 
@@ -110,6 +110,18 @@ class Transform:
         for i in range(self.Wfreq.shape[0]):
             h  = np.fft.ifft(self.Wfreq[i], n=Lh)      # impulse response
             h  = np.pad(h, (0, N_fft - Lh))            # zero-pad in **time**
+            Hf[i] = np.fft.fft(h, n=N_fft)             # back to frequency
+        return Hf
+    
+    def _inverse_filter_freq(self, N_fft: int):
+        if self.Wfreq.shape[1] == N_fft:
+            return self.Wfreq                  # nothing to do
+
+        Lh  = self.Wfreq.shape[1]
+        Hf  = np.zeros((self.Wfreq.shape[0], N_fft), dtype=complex)
+        for i in range(self.Wfreq.shape[0]):
+            h  = np.fft.ifft(self.Wfreq[i], n=Lh)      # impulse response
+            h  = np.pad(h, N_fft - Lh)            # zero-pad in **time**
             Hf[i] = np.fft.fft(h, n=N_fft)             # back to frequency
         return Hf
     # ------------------------------------------------------------
@@ -134,7 +146,7 @@ class Transform:
         else:
             N_fft = int(2 ** (np.ceil(np.log2(Lh))+1))   # single grid for both operands
             hop   = N_fft - Lh + 1
-            Wlong = self._filters_on_grid(N_fft)              # <- use the helper
+            Wlong = self._forward_filter_freq(N_fft)              # <- use the helper
             n_sc  = Wlong.shape[0]
 
             out_len = Lx + Lh - 1
@@ -186,15 +198,36 @@ class Transform:
         # ========  long-signal path (overlap-add)  ====================
         "Instead of doing OLA in the inverse, we do the inverse per scale and then sum"
         Lx, Lh = self.N, self.Wfreq.shape[1]
-        Lx_full = coeffs.shape[1]
 
-        N_fft = int(2 ** (np.ceil(np.log2(Lx + Lh - 1))))
-        n_sc = self.Wfreq.shape[0]
+        N_fft = int(2 ** (np.ceil(np.log2(Lh))+1))   # single grid for both operands
+        hop   = N_fft - Lh + 1
+        Wlong = self._inverse_filter_freq(N_fft)              # <- use the helper
+        n_sc  = Wlong.shape[0]
 
-        output_spectrum = np.zeros(N_fft, dtype=complex)
+        # Compute normalization factor
+        Sf     = (np.abs(Wlong) ** 2).sum(axis=0).real
+        eps    = 1e-12 * Sf.max()
+        Sf_inv = np.where(Sf > eps, 1.0 / Sf, 0.0)        # numerical floor
+
+        # Output length matches original signal length Lx, but compute full length first
+        out_len = Lx + Lh + hop - 1
+        out = np.zeros(out_len, dtype=complex)
+
+        k0s = np.arange(0, out_len, hop)
+        for k0 in k0s:
+            k1 = k0 + hop
+            seg = coeffs[:, k0:k1]
+            seg_pad = np.zeros((n_sc, N_fft), dtype=complex)
+            seg_pad[:, :seg.shape[1]] = seg
+            Cf_blk  = np.fft.fft(seg_pad, axis=1)
+            X_blk = (np.conj(Wlong) * Cf_blk).sum(axis=0) * Sf_inv
+            x_blk = np.fft.ifft(X_blk, n=N_fft)
+
+            end = min(out_len, k0 + N_fft)
+            out[k0:end] += x_blk[:end - k0]
 
 
-        return out[:Lx].real
+        return out[Lh:Lh + Lx].real
 
 
 
