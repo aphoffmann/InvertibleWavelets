@@ -1,11 +1,30 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║   █ █ █ █ █   Invertible-Wavelets Toolkit   █ █ █ █ █                        ║
+# ║ ──────────────────────────────────────────────────────────────────────────── ║
+# ║  Module       :  wavelets.py                                                 ║
+# ║  Package      :  invertiblewavelets                                          ║
+# ║  Author       :  Dr. Alex P. Hoffmann  <alex.p.hoffmann@nasa.gov>            ║
+# ║  Affiliation  :  NASA Goddard Space Flight Center — Greenbelt, MD 20771      ║
+# ║  Created      :  2025-04-30                                                  ║
+# ║  Last Updated :  2025-04-30                                                  ║
+# ║  Python       :  ≥ 3.10                                                      ║
+# ║  License      :  MIT — see LICENSE.txt                                       ║
+# ║                                                                              ║
+# ║  Description  :                                                              ║
+# ║      Canonical continuous-time mother wavelets for analysis & synthesis.     ║
+# ║      Exports:                                                                ║
+# ║          • Morlet       — complex analytic, tunable (fc, fb)                 ║
+# ║          • Cauchy       — analytic with algebraic tails (α)                  ║
+# ║          • MexicanHat   — real Ricker (2nd-deriv. Gaussian)                  ║
+# ║          • DoG          — generic n-th derivative of Gaussian                ║
+# ║                                                                              ║
+# ║                                                                              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
 from __future__ import annotations
 
 import numpy as np
-from numpy.typing import ArrayLike
-from scipy import signal, fftpack
-from scipy.signal import windows
 from scipy.special import erfcinv
-
 
 __all__ = [
     "Morlet",

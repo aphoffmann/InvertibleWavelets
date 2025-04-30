@@ -1,23 +1,33 @@
-"""
-Author: Alex Hoffmann
-Last Update: 01/27/2025
-Description: This module provides the `Transform` class for performing non-decimated wavelet transforms on time-series data. 
-             It supports both forward and inverse transformations using customizable wavelet functions (e.g., Morlet, Cauchy). 
-             The class allows configuration of various parameters such as scaling methods (linear or dyadic), padding strategies,
-             and scale resolution. Additionally, it includes functionality to visualize the power scalogram of the wavelet coefficients.
-
-Usage Example:
-    from invertiblewavelets import Transform
-    transform = Transform(data, fs, wavelet=Cauchy(), scales='linear')
-    coeffs = transform.forward()
-    reconstructed_data = transform.inverse(coeffs)
-    transform.power_scalogram(coeffs)
-"""
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║   █ █ █ █ █   Invertible-Wavelets Toolkit   █ █ █ █ █                        ║
+# ║ ──────────────────────────────────────────────────────────────────────────── ║
+# ║  Module       :  filterbank.py                                               ║
+# ║  Package      :  invertiblewavelets                                          ║
+# ║  Author       :  Dr. Alex P. Hoffmann  <alex.p.hoffmann@nasa.gov>            ║
+# ║  Affiliation  :  NASA Goddard Space Flight Center — Greenbelt, MD 20771      ║
+# ║  Created      :  2025-04-30                                                  ║
+# ║  Last Updated :  2025-04-30                                                  ║
+# ║  Python       :  ≥ 3.10                                                      ║
+# ║  License      :  MIT — see LICENSE.txt                                       ║
+# ║                                                                              ║
+# ║  Description  :                                                              ║
+# ║      Filter-bank generators (linear & dyadic) for the invertible-wavelets    ║
+# ║      framework.  Provides base 'FilterBank' ABC plus concrete                ║
+# ║      `LinearFilterBank` and `DyadicFilterBank` implementations.              ║
+# ║      This template can also be used to make Matched Filters. Enjoy!          ║
+# ║                                                                              ║
+# ║                                                                              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
 
 from abc import ABC, abstractmethod
 import numpy as np
 from scipy import signal
 
+__all__ = [
+    "FilterBank",
+    "LinearFilterBank",
+    "DyadicFilterBank",
+]
 
 class FilterBank(ABC):
     """
@@ -55,7 +65,6 @@ class FilterBank(ABC):
     @abstractmethod
     def _compute_filters(self):
         pass
-
 
 class LinearFilterBank(FilterBank):
     def _init_params(self, b=None, q=None, M=None, compensation=True, **_):
@@ -115,7 +124,6 @@ class LinearFilterBank(FilterBank):
         W[0] *= np.max(np.abs(W[1])) / np.max(np.abs(W[0]))
         self.Wfreq = W
         return self.Wfreq, ch_freqs
-
 
 class DyadicFilterBank(FilterBank):
     """

@@ -1,24 +1,26 @@
-"""
-Author: Alex Hoffmann
-Last Update: 01/27/2025
-Description: This module provides the `Transform` class for performing non-decimated wavelet transforms on time-series data. 
-             It supports both forward and inverse transformations using customizable wavelet functions (e.g., Morlet, Cauchy). 
-             The class allows configuration of various parameters such as scaling methods (linear or dyadic), padding strategies,
-             and scale resolution. Additionally, it includes functionality to visualize the power scalogram of the wavelet coefficients.
-
-Usage Example:
-    from invertiblewavelets import Transform
-    transform = Transform(data, fs, wavelet=Cauchy(), scales='linear')
-    coeffs = transform.forward()
-    reconstructed_data = transform.inverse(coeffs)
-    transform.power_scalogram(coeffs)
-"""
-
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║   █ █ █ █ █   Invertible-Wavelets Toolkit   █ █ █ █ █                        ║
+# ║ ──────────────────────────────────────────────────────────────────────────── ║
+# ║  Module       :  transform.py                                                ║
+# ║  Package      :  invertiblewavelets                                          ║
+# ║  Author       :  Dr. Alex P. Hoffmann  <alex.hoffmann@nasa.gov>              ║
+# ║  Affiliation  :  NASA Goddard Space Flight Center — Greenbelt, MD 20771      ║
+# ║  Created      :  2025-04-30                                                  ║
+# ║  Last Updated :  2025-04-30                                                  ║
+# ║  Python       :  ≥ 3.10                                                      ║
+# ║  License      :  MIT — see LICENSE.txt                                       ║
+# ║                                                                              ║
+# ║  Description  :                                                              ║
+# ║      Wavelet transform coefficient class.  Given an arbitrary                ║
+# ║      :class:`FilterBank`, `Transform` provides FFT-based forward             ║
+# ║      and inverse wavelet transforms—including overlap-add                    ║
+# ║      handling, phase alignment, and a NumPy-friendly scalogram plot.         ║
+# ║                                                                              ║
+# ║                                                                              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import signal
-from .wavelets import Morlet, Cauchy
 
 __all__ = ["Transform"]
 class Transform:
@@ -246,7 +248,7 @@ class Transform:
     ):
 
 
-        n_sc, n_t = coeffs.shape
+        _, n_t = coeffs.shape
         t_axis = np.linspace(0, n_t / self.fs, coeffs.shape[1])
 
         power = np.abs(coeffs) ** 2
