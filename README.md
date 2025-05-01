@@ -39,18 +39,15 @@ data = np.sin(2*np.pi*50*np.linspace(0,1,fs,endpoint=False))
 fb  = LinearFilterBank(
     wavelet=Morlet(fc=1, fb=1), fs=fs, N=fs, real=False
 )
-```
+
 # 2. Build the Transform
-```
 xfm = Transform(data, fs, fb)
-```
+
 # 3. Forward & inverse
-```
 coeffs = xfm.forward()
 reconstructed = xfm.inverse(coeffs)
-```
+
 # 4. Plot scalogram
-```
 xfm.scalogram(coeffs, title="Demo Scalogram")
 plt.show()
 ```
