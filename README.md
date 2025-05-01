@@ -8,7 +8,6 @@ A lightweight, fully invertible wavelet transform toolkit for Python — impleme
 - **Abstract FilterBank** base class with pluggable implementations:
   - `LinearFilterBank` (linear-scale center frequencies)
   - `DyadicFilterBank` (dyadic/power-of-two scales)
-  - `MatchedFilter` (matched filter for arbitrary templates)
 - FFT-based **forward** and **inverse** transforms with overlap-add handling
 - **Phase alignment** and **frame operator** normalization built in
 - **Scalogram** plotting (log-power over time–frequency)
