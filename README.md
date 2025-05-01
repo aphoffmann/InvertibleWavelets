@@ -22,7 +22,7 @@ A lightweight, fully invertible wavelet transform toolkit for Python — impleme
 Install directly from GitHub (no PyPI publish required):
 
 ```bash
-pip install git+https://github.com/yourusername/invertiblewavelets.git
+pip install git+https://github.com/aphoffmann/invertiblewavelets.git
 ```
 ## Quickstart
 ```
