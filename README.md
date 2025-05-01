@@ -26,34 +26,6 @@ Install directly from GitHub (no PyPI publish required):
 pip install git+https://github.com/yourusername/invertiblewavelets.git
 ```
 ## Quickstart
-
-import numpy as np
-import matplotlib.pyplot as plt
-
-from invertiblewavelets.filterbank import LinearFilterBank
-from invertiblewavelets.transform import Transform
-from invertiblewavelets.wavelets import Morlet
-
-# 1. Create a filter bank
-fs = 1000                       # sampling rate [Hz]
-data = np.sin(2*np.pi*50*np.linspace(0,1,fs,endpoint=False))
-fb  = LinearFilterBank(
-    wavelet=Morlet(fc=1, fb=1), fs=fs, N=fs, real=False
-)
-
-# 2. Build the Transform
-xfm = Transform(data, fs, fb)
-
-# 3. Forward & inverse
-coeffs = xfm.forward()
-reconstructed = xfm.inverse(coeffs)
-
-# 4. Plot scalogram
-xfm.scalogram(coeffs, title="Demo Scalogram")
-plt.show()
-
-
-
 ```
 import numpy as np
 import matplotlib.pyplot as plt
@@ -68,15 +40,19 @@ data = np.sin(2*np.pi*50*np.linspace(0,1,fs,endpoint=False))
 fb  = LinearFilterBank(
     wavelet=Morlet(fc=1, fb=1), fs=fs, N=fs, real=False
 )
-
+```
 # 2. Build the Transform
+```
 xfm = Transform(data, fs, fb)
-
+```
 # 3. Forward & inverse
+```
 coeffs = xfm.forward()
 reconstructed = xfm.inverse(coeffs)
-
+```
 # 4. Plot scalogram
+```
 xfm.scalogram(coeffs, title="Demo Scalogram")
 plt.show()
 ```
+
