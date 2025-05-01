@@ -24,7 +24,7 @@ Install directly from GitHub (no PyPI publish required):
 
 ```bash
 pip install git+https://github.com/yourusername/invertiblewavelets.git
-
+```
 ## Quickstart
 
 import numpy as np
