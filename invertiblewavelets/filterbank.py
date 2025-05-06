@@ -145,7 +145,7 @@ class DyadicFilterBank(FilterBank):
 
         if self.s_max is None:                   # user did not specify
             T_sig   = self.N / self.fs
-            margin  = 0.25 * T_sig           # keep 10 % head-room
+            margin  = 0.5 * T_sig           # keep 10 % head-room
             T_wave  = self.wavelet.effective_half_width()
             self.s_max  = max(1.0, (T_sig - margin) / (2*T_wave))
 
@@ -215,6 +215,7 @@ class DyadicFilterBank(FilterBank):
 
             if self.real:
                 w_t = w_t.real
+                
             W[i] = np.fft.fft(w_t)
             ch_freqs[i] = freqs[np.argmax(np.abs(W[i, : self.N // 2]))]
 

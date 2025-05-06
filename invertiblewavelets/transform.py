@@ -28,13 +28,7 @@ class Transform:
     # ------------------------------------------------------------
     # INIT
     # ------------------------------------------------------------
-    def __init__(self, data, fs, filterbank):
-        # ---------------- Input Data --------------------------
-        self.fs = fs
-        self.data = np.asarray(data, float)
-        self.N = self.data.size
-
-
+    def __init__(self, filterbank):
         # ---------------- filterbank --------------------------
         self.fb = filterbank
         self.Wfreq = self.fb.Wfreq                # (channels, fb_len)
@@ -50,29 +44,17 @@ class Transform:
         self.Sfreq = np.sum(np.abs(self.Wfreq) ** 2, axis=0)
         self.Sfreq[self.Sfreq < 1e-12] = 1e-12
 
-        # ---------------- Save the result ----------------------
-        self.coefficients = None
 
     # ------------------------------------------------------------
     # INTERNAL FUNCTIONS
     # ------------------------------------------------------------
-    def _trim_coeffs(self, full):
+    def _trim_coeffs(self, full, N):
         """
         Return an (n_ch, Lx) matrix that can be passed straight back to inverse().
-        • short-signal branch : keep the *front* Lx samples
         • long -signal branch : keep the centre Lx samples
         """
-        Lx, Lh = self.N, self.Wfreq.shape[1]
+        Lx, Lh = N, self.Wfreq.shape[1]
         full_len = full.shape[1]
-
-        if full_len == Lx:           # already 'same'
-            return full
-
-        # ---- short-signal path ----
-        if Lx < Lh:                 
-            return full[:, :Lx]      # keep leading segment
-
-        # ---- long-signal path ----
         start = (full_len - Lx) // 2
         end   = start + Lx
         return full[:, start:end]
@@ -81,25 +63,32 @@ class Transform:
         """
         Restore the coefficient block to the length expected by the
         inverse routine:
-            • Lh           when Lx ≤ Lh   (short-signal path)
-            • Lx + Lh - 1  otherwise      (overlap-add path)
+            • Lx + Lh - 1  otherwise  
         """
-        n_ch, Ltrim = short.shape
-        Lx, Lh = self.N, self.Wfreq.shape[1]
-        
+        n_ch, Lx = short.shape
+        Lh = self.Wfreq.shape[1]
 
-        # ---- short-signal path ----
-        if Lx < Lh:                        
-            full = np.zeros((n_ch, Lh), dtype=short.dtype)
-            full[:, :Ltrim] = short           # place at the front
-            full[:, Ltrim:] = self.coefficients[:, Ltrim:]
-            return full
-
-        # ---- long-signal path ----
         full_len  = Lx + Lh - 1
-        pad_left  = (full_len - Ltrim) // 2
-        full = np.zeros((n_ch, full_len), dtype=short.dtype)
-        full[:, pad_left:pad_left + Ltrim] = short
+        pad_left  = (full_len - Lx) // 2
+        pad_right = full_len - pad_left - Lx
+        full = np.zeros((n_ch, full_len), dtype=complex)
+        full[:, pad_left:pad_left + Lx] = short
+
+
+        if pad_left:
+            left_core = short[:, :pad_left][:, ::-1]          # reflect
+            # cosine ramp: 0 → 1 over pad_left samples
+            w_left = np.sin(0.5 * np.pi *
+                            np.linspace(0.0, 1.0, pad_left, endpoint=False))
+            full[:, :pad_left] = left_core * w_left
+
+        # -------------------- build & window RIGHT pad ----------------
+        if pad_right:
+            right_core = short[:, -pad_right:][:, ::-1]       # reflect
+            # cosine ramp: 1 → 0 over pad_right samples
+            w_right = np.sin(0.5 * np.pi *
+                             np.linspace(1.0, 0.0, pad_right, endpoint=False))
+            full[:, -pad_right:] = right_core * w_right
 
         return full
     
@@ -113,6 +102,7 @@ class Transform:
             h  = np.fft.ifft(self.Wfreq[i], n=Lh)      # impulse response
             h  = np.pad(h, (0, N_fft - Lh))            # zero-pad in **time**
             Hf[i] = np.fft.fft(h, n=N_fft)             # back to frequency
+
         return Hf
     
     def _inverse_filter_freq(self, N_fft: int):
@@ -124,26 +114,26 @@ class Transform:
         for i in range(self.Wfreq.shape[0]):
             h  = np.fft.ifft(self.Wfreq[i], n=Lh)      # impulse response
             h  = np.pad(h, N_fft - Lh)            # zero-pad in **time**
-            Hf[i] = np.fft.fft(h, n=N_fft)             # back to frequency
+            Hf[i] = np.fft.fft(h.real, n=N_fft)             # back to frequency
+
         return Hf
     
     # ------------------------------------------------------------
     # FORWARD / INVERSE
     # ------------------------------------------------------------
-    def forward(self, new_data=None, mode="same"):
-        if new_data is not None:
-            self.data = np.asarray(new_data, float)
-            self.N = self.data.size
+    def forward(self, data, mode="same"):
+        data = np.asarray(data, float)
+        N = data.size
 
-        Lx, Lh = self.N, self.Wfreq.shape[1]
+        Lx, Lh = N, self.Wfreq.shape[1]
 
         # ========  short-signal path (fits one FFT)  ==================
-        if Lx < Lh:
-            shifted = self.Wfreq * self.phase_shift[np.newaxis, :]
-            N_fft = Lh                           # same rule you had before
-            F = np.fft.fft(self.data, n=N_fft)
-            out = np.fft.ifft(shifted * F, n = Lh, axis=1)
-            self.coefficients = out
+        if Lx <= Lh:
+            #shifted = self.Wfreq * self.phase_shift[np.newaxis, :]
+            N_fft = Lh + Lx - 1                          # same rule you had before
+            shifted = self._forward_filter_freq(N_fft)
+            F = np.fft.fft(data, n=N_fft)
+            coefficients = np.fft.ifft(shifted * F, n = N_fft, axis=1)
 
         # ========  long-signal path (overlap-add)  ============================
         else:
@@ -153,10 +143,10 @@ class Transform:
             n_sc  = Wlong.shape[0]
 
             out_len = Lx + Lh - 1
-            out     = np.zeros((n_sc, out_len), dtype=complex)
+            coefficients = np.zeros((n_sc, out_len), dtype=complex)
 
             for k0 in range(0, Lx, hop):
-                blk   = self.data[k0:k0 + hop]
+                blk   = data[k0:k0 + hop]
                 try:
                     blk   = np.pad(blk, (0, N_fft - blk.size))
                 except ValueError:
@@ -171,36 +161,43 @@ class Transform:
                 if end > out_len:               # trim **only** the final block tail
                     Y_blk = Y_blk[:, : out_len - k0]
                     end   = out_len
-                out[:, k0:end] += Y_blk
-
-            self.coefficients = out
+                coefficients[:, k0:end] += Y_blk
 
         if mode == "full":
-            return out
+            return coefficients
         
-        return self._trim_coeffs(out)
+        return self._trim_coeffs(coefficients, N)
 
-    def inverse(self, coeffs = None):
-        if(coeffs is None):
-            coeffs = self.coefficients
-        
-        Lx, Lh = self.N, self.Wfreq.shape[1]
+    def inverse(self, coeffs, mode='same', Lx = None):
+        Lh = self.Wfreq.shape[1]
+        N = coeffs.shape[1]
 
-        if coeffs.shape[1] >= Lx:            # user passed the short form
+        if(mode == 'same'):
+            Lx = coeffs.shape[1]             # user passed the short form
             coeffs = self._untrim_coeffs(coeffs)
+        else:
+            if(N > Lh):
+                Lx = N - Lh + 1
+            else:
+                if Lx is None:
+                    raise ValueError("Lx must be specified when mode is not 'same'")
+                Lx = Lx
 
         # ========  short-signal path  =================================
-        if Lx < Lh:
-            shifted = self.Wfreq * self.phase_shift[np.newaxis, :]
-            N_fft = Lh
-            Cf = np.fft.fft(coeffs, n = Lh, axis=1)
-            Xf = np.sum(np.conj(shifted) * Cf, axis=0) / self.Sfreq
+        if Lx <= Lh:
+            N_fft = Lx + Lh 
+            shifted = self._inverse_filter_freq(N_fft)
+            Sfreq = np.sum(np.abs(shifted) ** 2, axis=0)
+            #Sfreq = np.where(np.abs(Sfreq) < 1, 1, Sfreq) 
+
+            Cf = np.fft.fft(coeffs, n = N_fft, axis=1)
+            Xf = np.sum(np.conj(shifted) * Cf, axis=0) / Sfreq
             x_full = np.fft.ifft(Xf)
-            return x_full[:Lx].real
+            return x_full[Lh:Lh+Lx].real
 
         # ========  long-signal path (overlap-add)  ====================
         "Instead of doing OLA in the inverse, we do the inverse per scale and then sum"
-        Lx, Lh = self.N, self.Wfreq.shape[1]
+
 
         N_fft = int(2 ** (np.ceil(np.log2(Lh))+1))   # single grid for both operands
         hop   = N_fft - Lh + 1
@@ -238,6 +235,7 @@ class Transform:
     def scalogram(
         self,
         coeffs,
+        fs = 1.0,
         cmap="viridis",
         y_tick_steps=5,
         figsize=(10, 6),
@@ -249,7 +247,7 @@ class Transform:
 
 
         _, n_t = coeffs.shape
-        t_axis = np.linspace(0, n_t / self.fs, coeffs.shape[1])
+        t_axis = np.linspace(0, n_t / fs, coeffs.shape[1])
 
         power = np.abs(coeffs) ** 2
 
