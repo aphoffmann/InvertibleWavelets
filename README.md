@@ -29,26 +29,38 @@ pip install git+https://github.com/aphoffmann/invertiblewavelets.git
 import numpy as np
 import matplotlib.pyplot as plt
 
-from invertiblewavelets.filterbank import LinearFilterBank
-from invertiblewavelets.transform import Transform
-from invertiblewavelets.wavelets import Morlet
+from invertiblewavelets import LinearFilterBank, Transform, Morlet
 
-# 1. Create a filter bank
+# 1. Create a test signal
 fs = 1000                       # sampling rate [Hz]
-data = np.sin(2*np.pi*50*np.linspace(0,1,fs,endpoint=False))
+N = 10_000
+t = np.arange(N)/fs
+data = np.sin(2*np.pi*100*t)
+
+# 2. Create a Filterbank
 fb  = LinearFilterBank(
-    wavelet=Morlet(fc=1, fb=1), fs=fs, N=fs, real=False
+    wavelet=Morlet(fc=1, fb=100),
+    fs=fs, 
+    N=N, 
+    b = 1/10, 
+    real=False
 )
 
-# 2. Build the Transform
-xfm = Transform(data, fs, fb)
+# 3. Build the Transform with the filterbank
+xfm = Transform(fb.Wfreq)
 
-# 3. Forward & inverse
-coeffs = xfm.forward()
-reconstructed = xfm.inverse(coeffs)
+# 4. Forward
+xfm.forward(data, mode='full')
 
-# 4. Plot scalogram
+# 5. Plot scalogram
 xfm.scalogram(coeffs, title="Demo Scalogram")
 plt.show()
+
+# 6. Inverse
+reconstructed = xfm.inverse(coeffs, mode='full', Lx = N)
+
+# 7. Print RMSE
+print(np.sqrt(np.mean((data-reconstructed)**2)))
+
 ```
 
