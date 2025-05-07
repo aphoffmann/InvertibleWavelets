@@ -9,7 +9,7 @@ A lightweight, fully invertible wavelet transform toolkit for Python — impleme
   - `LinearFilterBank` (linear-scale center frequencies)
   - `DyadicFilterBank` (dyadic/power-of-two scales)
 - FFT-based **forward** and **inverse** transforms with overlap-add handling
-- **Phase alignment** and **frame operator** normalization built in
+- **frame operator** normalization built in to assist the dual-frame inverse
 - **Scalogram** plotting (log-power over time–frequency)
 - Four canonical mother wavelets:
   - `Morlet`, `Cauchy`, `MexicanHat`, `DoG`
