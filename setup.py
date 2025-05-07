@@ -12,7 +12,7 @@ setup(
     description="Invertible wavelet transform toolkit",
     author="Dr. Alex P. Hoffmann",
     author_email="alex.p.hoffmann@nasa.gov",
-    url="https://github.com/yourusername/invertiblewavelets",
+    url="https://github.com/aphoffmann/invertiblewavelets",
     install_requires=REQUIREMENTS,
     classifiers=[
         "Programming Language :: Python :: 3",

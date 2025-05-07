@@ -6,7 +6,7 @@
 # ║  Author       :  Dr. Alex P. Hoffmann  <alex.p.hoffmann@nasa.gov>            ║
 # ║  Affiliation  :  NASA Goddard Space Flight Center — Greenbelt, MD 20771      ║
 # ║  Created      :  2025-04-30                                                  ║
-# ║  Last Updated :  2025-04-30                                                  ║
+# ║  Last Updated :  2025-05-07                                                  ║
 # ║  Python       :  ≥ 3.10                                                      ║
 # ║  License      :  MIT — see LICENSE.txt                                       ║
 # ║                                                                              ║
@@ -67,8 +67,20 @@ class FilterBank(ABC):
         pass
 
 class LinearFilterBank(FilterBank):
-    def _init_params(self, b=None, q=None, M=None, compensation=True, **_):
-        # Initialize and compute defaults for linear-scale parameters (Holighaus et al.)
+    """
+    Generates a linear scales.
+
+    Parameters
+    ----------
+    b : float
+        Maximum scale.
+    q : float or None
+        Scale resolution. Must be a factor of b.
+    M : float or None
+        Number of scales
+    """
+    def _init_params(self, b=None, q=None, M=None, compensation=False, **_):
+        # Initialize and compute defaults for linear-scale parameters (Similar to Holighaus et al., 2023)
         self.b = b
         self.q = q
         self.M = M
@@ -87,7 +99,7 @@ class LinearFilterBank(FilterBank):
             T_wave  = self.wavelet.effective_half_width()
             self.b  = max(1.0, (T_sig - margin) / (2*T_wave))
 
-        # Scale resolution q
+        # Scale resolution q = n*b
         if self.q is None:
             self.q = 5 * self.b
 
@@ -112,22 +124,35 @@ class LinearFilterBank(FilterBank):
                 alpha = (1.0 / self.b) + (j / self.q)
                 wtime = np.sqrt(alpha) * self.wavelet.eval_analysis(alpha * t)
             else:
-                wtime = (1.0 / np.sqrt(self.b)) * np.sinc(t / self.b * 2) * \
-                        signal.windows.tukey(self.N, alpha=0.3)
-                wtime = signal.hilbert(wtime)
+                continue
+
             if self.real:
                 wtime = wtime.real
+
             W[i, :] = np.fft.fft(wtime)
             ch_freqs[i] = real_freqs[np.argmax(np.abs(W[i, :self.N//2]))]
 
-        # Normalize first channel to match second
-        W[0] *= np.max(np.abs(W[1])) / np.max(np.abs(W[0]))
+        if self.compensation:
+            psum = np.sum(np.abs(W[1:])**2, axis=0)
+            comp_mag = np.sqrt(np.clip(1.0 - psum, 0.0, None))
+            comp_t = np.fft.ifft(comp_mag)
+            comp_t = np.fft.fftshift(comp_t)
+            comp_t = signal.hilbert(comp_t.real)
+            if self.real:
+                comp_t = comp_t.real
+            W[0] = np.fft.fft(comp_t)
+
+        # Normalize by energy in scale
+        energy = np.sum(np.abs(W)**2, axis=1)    
+        W = W/np.sqrt(energy)[:,None]
+
         self.Wfreq = W
+
         return self.Wfreq, ch_freqs
 
 class DyadicFilterBank(FilterBank):
     """
-    Generates a dyadic (base-2) scale pyramid robustly.
+    Generates a dyadic (base-2) scales.
 
     Parameters
     ----------
@@ -138,7 +163,7 @@ class DyadicFilterBank(FilterBank):
         still fits into the effective signal duration with 10 % margin.
     """
 
-    def _init_params(self, dj=1/4, s_max=None, compensation=True, **_):
+    def _init_params(self, dj=1/4, s_max=None, compensation=False, **_):
         self.dj = float(dj)
         self.compensation = bool(compensation)
         self.s_max = s_max
@@ -153,36 +178,11 @@ class DyadicFilterBank(FilterBank):
     def _define_channel_indices(self):
         return None  # handled implicitly
 
-    # ------------------------------------------------------------------
-    #  robust helper to get wavelet center frequency
-    # ------------------------------------------------------------------
-    def _guess_central_freq(self):
-        """Return positive center frequency (Hz) of the prototype wavelet."""
-        # If the wavelet object exposes it, use that first.
-        if hasattr(self.wavelet, "central_frequency"):
-            cf = float(self.wavelet.central_frequency)
-            if cf > 0:
-                return cf
-
-        # Otherwise do a small FFT on an oversampled wavelet.
-        oversamp = 8
-        L = 1024
-        t = np.arange(L * oversamp) / (self.fs * oversamp)
-        w = self.wavelet.eval_analysis(t).real
-        W = np.fft.rfft(w)
-        freqs = np.fft.rfftfreq(W.size * 2 - 2, d=1 / (self.fs * oversamp))
-
-        mag = np.abs(W)
-        if mag.max() == 0:
-            return self.fs / 4  # fallback (quarter Nyquist)
-
-        peak = np.argmax(mag)
-        return abs(freqs[peak])
 
     # --------------------------------------------------------------
     def _compute_filters(self):
         # smallest scale so peak is at Nyquist
-        fc = self._guess_central_freq()
+        fc = self.wavelet.fc
         s_min = 2.0 * fc / self.fs
         if s_min <= 0:
             s_min = 1e-6
@@ -193,11 +193,11 @@ class DyadicFilterBank(FilterBank):
         J = int(np.floor(np.log2(self.s_max / s_min) / self.dj))
         scales = s_min * 2.0 ** (self.dj * np.arange(J + 1))
         scales = scales[::-1]                       # large→small  (low→high f)
-
+        
         # + compensation channel?
         if self.compensation:
             scales = np.concatenate(([scales[0] * 2], scales))  # dummy slot
-
+        
         W = np.zeros((len(scales), self.N), complex)
         ch_freqs = np.zeros(len(scales))
         freqs = np.fft.fftfreq(self.N, d=1 / self.fs)
@@ -205,11 +205,7 @@ class DyadicFilterBank(FilterBank):
 
         for i, s in enumerate(scales):
             if self.compensation and i == 0:
-                # sinc compensation below lowest dyadic channel
-                w_t = (1 / np.sqrt(scales[1])) * np.sinc(t / scales[1] * 2)
-                w_t *= signal.windows.tukey(self.N, alpha=0.3)
-                w_t = signal.hilbert(w_t)
-
+                continue
             else:
                 w_t = np.sqrt(s) * self.wavelet.eval_analysis(t / s)
 
@@ -218,6 +214,20 @@ class DyadicFilterBank(FilterBank):
                 
             W[i] = np.fft.fft(w_t)
             ch_freqs[i] = freqs[np.argmax(np.abs(W[i, : self.N // 2]))]
+
+        if self.compensation:
+            psum = np.sum(np.abs(W[1:])**2, axis=0)
+            comp_mag = np.sqrt(np.clip(1.0 - psum, 0.0, None))
+            comp_t = np.fft.ifft(comp_mag)
+            comp_t = np.fft.fftshift(comp_t)
+            comp_t = signal.hilbert(comp_t.real)
+            if self.real:
+                comp_t = comp_t.real
+            W[0] = np.fft.fft(comp_t)
+
+        # Normalize by energy in scale
+        energy = np.sum(np.abs(W)**2, axis=1)    
+        W = W/np.sqrt(energy)[:,None]
 
         self.Wfreq = W
         return self.Wfreq, ch_freqs

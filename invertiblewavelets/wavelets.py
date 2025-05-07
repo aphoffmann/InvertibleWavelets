@@ -6,7 +6,7 @@
 # ║  Author       :  Dr. Alex P. Hoffmann  <alex.p.hoffmann@nasa.gov>            ║
 # ║  Affiliation  :  NASA Goddard Space Flight Center — Greenbelt, MD 20771      ║
 # ║  Created      :  2025-04-30                                                  ║
-# ║  Last Updated :  2025-04-30                                                  ║
+# ║  Last Updated :  2025-05-07                                                  ║
 # ║  Python       :  ≥ 3.10                                                      ║
 # ║  License      :  MIT — see LICENSE.txt                                       ║
 # ║                                                                              ║
@@ -34,10 +34,14 @@ __all__ = [
 ]
 
 # ------------------------------------------------------------------
-# Helpers
+# Consants
 # ------------------------------------------------------------------
 PI = np.pi
 
+
+# ------------------------------------------------------------------
+# Morlet Wavelet
+# ------------------------------------------------------------------
 class Morlet:
     def __init__(self, fc=1, fb=1):
         """
@@ -70,63 +74,48 @@ class Morlet:
 
         return wavelet
 
+# ------------------------------------------------------------------
+# Cauchy Wavelet
+# ------------------------------------------------------------------
 class Cauchy:
     def __init__(self, alpha=300):
-        """
-        TODO
-        """
         self.alpha = float(alpha)
+        self.fc = 1
 
     def effective_half_width(self, eps=1e-3):
-        # amplitude and energy have same algebraic fall-off
         return (self.alpha/(2*np.pi))*np.sqrt(eps**(-2/(1+self.alpha)) - 1)
 
     def eval_analysis(self, t):
         """Continuous-time 'analysis' mother wavelet."""
-        # factor^(-1 - alpha)
         t = t
         factor = 1 - 2j * np.pi * t / self.alpha
         wavelet = factor ** (-1 - self.alpha)
         return wavelet
-    
+
+# ------------------------------------------------------------------
+# Who named this?
+# ------------------------------------------------------------------
 class MexicanHat:
-    """Real Mexican-Hat / Ricker wavelet (2nd derivative of Gaussian).
-
-    Normalized to unit energy (L2 norm ≈1). The constant is derived so that
-    ∫|ψ|² dt = 1.
-    """
-
     def __init__(self):
-        # Pre‑compute normalization constant such that L2‑norm ≈1.
-        # ∫((1−t²)² e^{−t²}) dt = √π /2 for default scaling.
         self.norm = 2 / (np.sqrt(3) * np.pi**0.25)
+        self.fc = np.sqrt(2) / 2 / np.pi
 
     def effective_half_width(self, eps=1e-8):
         return np.sqrt(np.log(1/eps)) 
 
     def eval_analysis(self, t: np.ndarray):
         return self.norm * (1 - t**2) * np.exp(-t**2 / 2)
-    
+
+# ------------------------------------------------------------------
+# DoG Wavelet
+# ------------------------------------------------------------------
 class DoG:
-    """nth derivative-of-Gaussian wavelet (real).
-
-    Parameters
-    ----------
-    n : int >=1
-        Derivative order. n even ⇒ symmetric, n odd ⇒ antisymmetric.
-    scale : float >0
-        Time scaling of the Gaussian envelope (sigma). Default 1.
-    """
-
     def __init__(self, n: int = 1, sigma: float = 1.0):
         if n < 1:
             raise ValueError("Derivative order n must be >=1")
         self.n = int(n)
         self.sigma = float(sigma)
-        # normalization constant to give unit energy at scale=1
-        # For n‑th derivative of exp(−t²/2σ²), L2 norm squared =
-        #   2^{n+1} n! √π / (2σ) / (2σ)^{2n}
-        # Here we set σ=scale; constant chosen numerically later.
+        self.fc = np.sqrt(1.0 * n)/ (2*np.pi*sigma)
 
     def _hermite(self, n: int, x: np.ndarray):
         """Probabilist Hermite polynomial H_n (recursive)."""
@@ -150,5 +139,5 @@ class DoG:
         Hn = self._hermite(self.n, x)
         coef = ((-1) ** self.n) / (self.sigma ** (self.n + 0.5))
         psi = coef * Hn * gauss
-        # Normalize numerically to unit energy (optional for analysis)
+        
         return psi

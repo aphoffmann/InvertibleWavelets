@@ -6,21 +6,22 @@
 # ║  Author       :  Dr. Alex P. Hoffmann  <alex.hoffmann@nasa.gov>              ║
 # ║  Affiliation  :  NASA Goddard Space Flight Center — Greenbelt, MD 20771      ║
 # ║  Created      :  2025-04-30                                                  ║
-# ║  Last Updated :  2025-04-30                                                  ║
+# ║  Last Updated :  2025-05-07                                                  ║
 # ║  Python       :  ≥ 3.10                                                      ║
 # ║  License      :  MIT — see LICENSE.txt                                       ║
 # ║                                                                              ║
 # ║  Description  :                                                              ║
 # ║      Wavelet transform coefficient class.  Given an arbitrary                ║
-# ║      :class:`FilterBank`, `Transform` provides FFT-based forward             ║
+# ║      `FilterBank` object, `Transform` provides FFT-based forward             ║
 # ║      and inverse wavelet transforms—including overlap-add                    ║
-# ║      handling, phase alignment, and a NumPy-friendly scalogram plot.         ║
+# ║      handling, and a NumPy-friendly scalogram plot.                          ║
 # ║                                                                              ║
 # ║                                                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 import numpy as np
 import matplotlib.pyplot as plt
+from .filterbank import FilterBank
 
 __all__ = ["Transform"]
 class Transform:
@@ -28,30 +29,23 @@ class Transform:
     # ------------------------------------------------------------
     # INIT
     # ------------------------------------------------------------
-    def __init__(self, filterbank):
-        # ---------------- filterbank --------------------------
-        self.fb = filterbank
-        self.Wfreq = self.fb.Wfreq                # (channels, fb_len)
-        self.channel_freqs = self.fb.channel_freqs
-        self.fb_len = self.Wfreq.shape[-1]
-        self.n_channels = self.Wfreq.shape[0]
+    def __init__(self,
+            Wfreq: np.ndarray,           # shape (n_scales, n_freqs)
+            ):
+        
+        self.Wfreq       = Wfreq
 
-        # ---------------- phase‑align --------------------------
-        self.freqs = np.fft.fftfreq(self.fb_len)
-        self.phase_shift = np.exp(-1j * 2 * np.pi * self.freqs * (self.fb_len / 2))
-
-        # ---------------- frame operator ----------------------
-        self.Sfreq = np.sum(np.abs(self.Wfreq) ** 2, axis=0)
-        self.Sfreq[self.Sfreq < 1e-12] = 1e-12
-
+    @classmethod
+    def from_filterbank(cls, fb: FilterBank):
+        return cls(fb.Wfreq)
 
     # ------------------------------------------------------------
     # INTERNAL FUNCTIONS
     # ------------------------------------------------------------
     def _trim_coeffs(self, full, N):
         """
-        Return an (n_ch, Lx) matrix that can be passed straight back to inverse().
-        • long -signal branch : keep the centre Lx samples
+        Return an (n_ch, Lx) matrix without the zero padding from the 
+        linear convolution.
         """
         Lx, Lh = N, self.Wfreq.shape[1]
         full_len = full.shape[1]
@@ -62,8 +56,8 @@ class Transform:
     def _untrim_coeffs(self, short):
         """
         Restore the coefficient block to the length expected by the
-        inverse routine:
-            • Lx + Lh - 1  otherwise  
+        inverse routine: Lx + Lh - 1. Inverting the trimmed coefficients
+        will introduce error into the inversion.  
         """
         n_ch, Lx = short.shape
         Lh = self.Wfreq.shape[1]
@@ -74,10 +68,9 @@ class Transform:
         full = np.zeros((n_ch, full_len), dtype=complex)
         full[:, pad_left:pad_left + Lx] = short
 
-
         if pad_left:
             left_core = short[:, :pad_left][:, ::-1]          # reflect
-            # cosine ramp: 0 → 1 over pad_left samples
+            # cosine ramp: 0 -> 1 over pad_left samples
             w_left = np.sin(0.5 * np.pi *
                             np.linspace(0.0, 1.0, pad_left, endpoint=False))
             full[:, :pad_left] = left_core * w_left
@@ -85,7 +78,7 @@ class Transform:
         # -------------------- build & window RIGHT pad ----------------
         if pad_right:
             right_core = short[:, -pad_right:][:, ::-1]       # reflect
-            # cosine ramp: 1 → 0 over pad_right samples
+            # cosine ramp: 1 -> 0 over pad_right samples
             w_right = np.sin(0.5 * np.pi *
                              np.linspace(1.0, 0.0, pad_right, endpoint=False))
             full[:, -pad_right:] = right_core * w_right
@@ -94,27 +87,27 @@ class Transform:
     
     def _forward_filter_freq(self, N_fft: int):
         if self.Wfreq.shape[1] == N_fft:
-            return self.Wfreq                  # nothing to do
+            return self.Wfreq            
 
         Lh  = self.Wfreq.shape[1]
         Hf  = np.zeros((self.Wfreq.shape[0], N_fft), dtype=complex)
         for i in range(self.Wfreq.shape[0]):
             h  = np.fft.ifft(self.Wfreq[i], n=Lh)      # impulse response
-            h  = np.pad(h, (0, N_fft - Lh))            # zero-pad in **time**
+            h  = np.pad(h, (0, N_fft - Lh))            # zero-pad in time
             Hf[i] = np.fft.fft(h, n=N_fft)             # back to frequency
 
         return Hf
     
     def _inverse_filter_freq(self, N_fft: int):
         if self.Wfreq.shape[1] == N_fft:
-            return self.Wfreq                  # nothing to do
+            return self.Wfreq                  
 
         Lh  = self.Wfreq.shape[1]
         Hf  = np.zeros((self.Wfreq.shape[0], N_fft), dtype=complex)
         for i in range(self.Wfreq.shape[0]):
             h  = np.fft.ifft(self.Wfreq[i], n=Lh)      # impulse response
-            h  = np.pad(h, N_fft - Lh)            # zero-pad in **time**
-            Hf[i] = np.fft.fft(h.real, n=N_fft)             # back to frequency
+            h  = np.pad(h, N_fft - Lh)                 # zero-pad in time
+            Hf[i] = np.fft.fft(h.real, n=N_fft)        # back to frequency
 
         return Hf
     
@@ -129,8 +122,7 @@ class Transform:
 
         # ========  short-signal path (fits one FFT)  ==================
         if Lx <= Lh:
-            #shifted = self.Wfreq * self.phase_shift[np.newaxis, :]
-            N_fft = Lh + Lx - 1                          # same rule you had before
+            N_fft = Lh + Lx - 1 # Linear Convolutoin instead of circular
             shifted = self._forward_filter_freq(N_fft)
             F = np.fft.fft(data, n=N_fft)
             coefficients = np.fft.ifft(shifted * F, n = N_fft, axis=1)
@@ -139,7 +131,7 @@ class Transform:
         else:
             N_fft = int(2 ** (np.ceil(np.log2(Lh))+1))   # single grid for both operands
             hop   = N_fft - Lh + 1
-            Wlong = self._forward_filter_freq(N_fft)              # <- use the helper
+            Wlong = self._forward_filter_freq(N_fft)     # Find Wfreq on shared frequency grid
             n_sc  = Wlong.shape[0]
 
             out_len = Lx + Lh - 1
@@ -154,11 +146,12 @@ class Transform:
                     print("blk:", blk.size, "N_fft:", N_fft)
                     print("hop:", hop, "Lh:", Lh, "Lx:", Lx)
                     raise(Exception("Padding failed."))
+                
                 X_blk = np.fft.fft(blk, n=N_fft)
                 Y_blk = np.fft.ifft(Wlong * X_blk, axis=1)
 
                 end = k0 + N_fft
-                if end > out_len:               # trim **only** the final block tail
+                if end > out_len:               # trim only the final block tail
                     Y_blk = Y_blk[:, : out_len - k0]
                     end   = out_len
                 coefficients[:, k0:end] += Y_blk
@@ -175,7 +168,7 @@ class Transform:
         if(mode == 'same'):
             Lx = coeffs.shape[1]             # user passed the short form
             coeffs = self._untrim_coeffs(coeffs)
-        else:
+        else: # mode = 'full'
             if(N > Lh):
                 Lx = N - Lh + 1
             else:
@@ -187,8 +180,7 @@ class Transform:
         if Lx <= Lh:
             N_fft = Lx + Lh 
             shifted = self._inverse_filter_freq(N_fft)
-            Sfreq = np.sum(np.abs(shifted) ** 2, axis=0)
-            #Sfreq = np.where(np.abs(Sfreq) < 1, 1, Sfreq) 
+            Sfreq = np.sum(np.abs(shifted) ** 2, axis=0) # Inverse Frame Operator
 
             Cf = np.fft.fft(coeffs, n = N_fft, axis=1)
             Xf = np.sum(np.conj(shifted) * Cf, axis=0) / Sfreq
@@ -196,12 +188,9 @@ class Transform:
             return x_full[Lh:Lh+Lx].real
 
         # ========  long-signal path (overlap-add)  ====================
-        "Instead of doing OLA in the inverse, we do the inverse per scale and then sum"
-
-
         N_fft = int(2 ** (np.ceil(np.log2(Lh))+1))   # single grid for both operands
         hop   = N_fft - Lh + 1
-        Wlong = self._inverse_filter_freq(N_fft)              # <- use the helper
+        Wlong = self._inverse_filter_freq(N_fft) 
         n_sc  = Wlong.shape[0]
 
         # Compute normalization factor
@@ -235,11 +224,12 @@ class Transform:
     def scalogram(
         self,
         coeffs,
+        channel_freqs,
         fs = 1.0,
         cmap="viridis",
         y_tick_steps=5,
         figsize=(10, 6),
-        title="Wavelet Coefficient Log‑Power",
+        title="Wavelet Coefficient Log-Power",
         vmin=None,
         vmax=None,
         interpolation='none',
@@ -256,7 +246,7 @@ class Transform:
             np.log(power),
             origin="lower",
             aspect="auto",
-            extent=[t_axis[0], t_axis[-1], self.channel_freqs[0], self.channel_freqs[-1]],
+            extent=[t_axis[0], t_axis[-1], channel_freqs[0], channel_freqs[-1]],
             cmap=cmap,
             vmin=vmin,
             vmax=vmax,
@@ -265,7 +255,7 @@ class Transform:
         plt.title(title)
         plt.xlabel("Time [s]")
         plt.ylabel("Frequency [Hz]")
-        yt = np.linspace(self.channel_freqs[0], self.channel_freqs[-1], y_tick_steps)
+        yt = np.linspace(channel_freqs[0], channel_freqs[-1], y_tick_steps)
         plt.yticks(yt, [f"{y:.2f}" for y in yt])
         plt.colorbar(label="Log Power")
         plt.tight_layout()
