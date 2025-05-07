@@ -29,7 +29,7 @@ pip install git+https://github.com/aphoffmann/invertiblewavelets.git
 import numpy as np
 import matplotlib.pyplot as plt
 
-from invertiblewavelets import LinearFilterBank, Transform, Morlet
+from invertiblewavelets import LinearFilterBank, DyadicFilterBank, Transform, Morlet
 
 # 1. Create a test signal
 fs = 1000                       # sampling rate [Hz]
@@ -43,6 +43,14 @@ fb  = LinearFilterBank(
     fs=fs, 
     N=N, 
     b = 1/10, 
+    real=False
+)
+
+fb_dyadic = DyadicFilterBank(
+    wavelet=Morlet(fc=1, fb=100),
+    fs=fs,
+    N = N,
+    s_max = 1/10,
     real=False
 )
 
