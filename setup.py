@@ -8,7 +8,7 @@ REQUIREMENTS = [
 
 setup(
     name="invertiblewavelets",
-    version="1.0.0",
+    version="1.0.1",
     description="Invertible wavelet transform toolkit",
     author="Dr. Alex P. Hoffmann",
     author_email="alex.p.hoffmann@nasa.gov",

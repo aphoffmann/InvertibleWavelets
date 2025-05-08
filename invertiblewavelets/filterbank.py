@@ -101,7 +101,11 @@ class LinearFilterBank(FilterBank):
 
         # Scale resolution q = n*b
         if self.q is None:
-            self.q = 5 * self.b
+            if self.M is None:
+                self.q = 5 * self.b
+            else: 
+                nyq_gap = self.fs / 2 - 1 / self.b
+                self.q = max((self.M - 1) / nyq_gap, b)
 
         # Number of scales M
         if self.M is None:
